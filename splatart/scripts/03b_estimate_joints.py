@@ -65,7 +65,7 @@ def process_joints(input_model_dirs:list[str],\
                 dataset_dir:str,\
                 output_dir:str,\
                 ns_base_path:str = "/home/stanlew/src/nerfstudio_splatart/",
-                parts_to_ignore = [0,1],
+                parts_to_ignore = [0,2],
                 err_thresh = 0.1):
     
     splat_managers = load_managers(input_model_dirs, output_dir, "splat_manager_registered")

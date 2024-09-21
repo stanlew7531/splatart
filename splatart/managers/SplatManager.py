@@ -262,15 +262,6 @@ class SplatManager(torch.nn.Module):
         return rots_tf, trans_tf
     
     def render_parts_at_campose(self, cam_pose, cam_intrinsic, width, height, part_idxs, apply_transforms=True):
-        # parts_gauss_params = None
-        # for part_idx in part_idxs:
-            # part_gauss_params = self.parts_gauss_params[part_idx]
-            # if parts_gauss_params is None:
-                # parts_gauss_params = part_gauss_params
-            # else:
-                # for key in part_gauss_params.keys():
-                    # if(parts_gauss_params[key] is not None):
-                        # parts_gauss_params[key] = torch.cat([parts_gauss_params[key], part_gauss_params[key]], dim=0)
         parts_gauss_params = []
         for part_idx in part_idxs:
             parts_gauss_params.append(self.parts_gauss_params[part_idx])
