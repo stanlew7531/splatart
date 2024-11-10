@@ -16,7 +16,7 @@ def process_models(input_model_dirs:list[str],\
                 dataparser_tf:str,
                 num_classes:int,\
                 output_dir:str,\
-                ns_base_path:str = "/home/stanlew/src/nerfstudio_splatart/"):
+                ns_base_path:str = "/home/vishalchandra/Desktop/nerfstudio_dev/"):
     os.makedirs(output_dir, exist_ok=True)
     splat_managers = []
     i = 0

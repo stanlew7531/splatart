@@ -14,11 +14,11 @@
 # declare -a objects=("blade" "washer" "stapler" "oven")
 # declare -a num_classes=(4 7 5 11)
 
-declare -a objects=("oven")
-declare -a num_classes=(11)
+declare -a objects=("blade")
+declare -a num_classes=(4)
 
 # declare -a times=(0 1)
-declare -a times=(0)
+declare -a times=(1)
 
 for i in "${!objects[@]}"
     do
@@ -28,7 +28,7 @@ for i in "${!objects[@]}"
         for j in "${times[@]}"
             do
                 echo "$j"
-                cd ~/src/nerfstudio_splatart
-                ns-train semantic-splatfacto --data /media/stanlew/Data/narf_sapien_data/v5/${objects[$i]}/$j/transforms.json --experiment_name exp_sapien_${objects[$i]} --timestamp config_$j --vis=viewer+tensorboard --pipeline.model.num_classes ${num_classes[$i]} --pipeline.model.random_scale 0.1 --pipeline.model.camera_optimizer.mode off --pipeline.model.cull_screen_size 0.5 --pipeline.model.cull_scale_thresh 1.3 --max-num-iterations 6000
+                cd ~/Desktop/nerfstudio_dev
+                ns-train semantic-splatfacto --data ~/Desktop/splatart_data/narf_sapien_data/v5/${objects[$i]}/$j/transforms.json --experiment_name exp_sapien_${objects[$i]} --timestamp config_$j --vis=viewer+tensorboard --pipeline.model.num_classes ${num_classes[$i]} --pipeline.model.random_scale 0.1 --pipeline.model.camera_optimizer.mode off --pipeline.model.cull_screen_size 0.5 --pipeline.model.cull_scale_thresh 1.3 --max-num-iterations 20000
             done
     done
