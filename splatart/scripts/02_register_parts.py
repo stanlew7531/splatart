@@ -80,7 +80,7 @@ def process_models(input_model_dirs:list[str],\
                 dataset_dir:str,\
                 output_dir:str,\
                 ns_base_path:str = "/home/stanlew/src/nerfstudio_splatart/",
-                parts_to_skip:list[int] = [0,2]):
+                parts_to_skip:list[int] = [0,1]):
     # load the existing splat managers
     splat_managers = []
     dataparser_tfs = []

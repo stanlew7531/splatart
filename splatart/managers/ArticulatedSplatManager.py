@@ -20,25 +20,23 @@ from splatart.utils.helpers import convert_cam_opengl_opencv
 
 
 class ArticulatedSplatManager(torch.nn.Module):
-    def __init__(self, input_splat_managers: list[str], configuration_vector_pkl: str, *args, **kwargs):
+    def __init__(self, input_splat_managers: list[str], configuration_vector_pkl: str, root_idx = 0, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # self.splat_managers_cache = load_managers(input_splat_managers, managers_subdir = "", manager_prefix="splat_manager_registered")
-        # self.splat_managers_cache = load_managers(input_splat_managers) #load_managers_nerfstudio(input_splat_managers, 1)
-        self.splat_manager = torch.load("/home/stanlew/src/splatart/results/sapien_exp/washer/splat_manager_registered_0.pth")
-        self.splat_managers_cache = [self.splat_manager]
-        
-        # self.splat_manager.num_parts = len(self.splat_managers_cache)
-        # for i in range(1, self.splat_manager.num_parts):
-        #     self.splat_manager.parts_gauss_params[i] = self.splat_managers_cache[i].object_gaussian_params
+        if(len(input_splat_managers) == 1):
+            self.splat_manager = torch.load(input_splat_managers[0])
+            self.splat_managers_cache = [self.splat_manager]
+        else:
+            self.splat_managers_cache = load_managers(input_splat_managers)
+            self.splat_manager = self.splat_managers_cache[0]
+            self.splat_manager.num_parts = len(self.splat_managers_cache)
+            for i in range(1, self.splat_manager.num_parts):
+                self.splat_manager.parts_gauss_params[i] = self.splat_managers_cache[i].object_gaussian_params
 
         with open(configuration_vector_pkl, "rb") as f:
             configuration_vector = pickle.load(f)
         self.configuration_vector = configuration_vector
-        for entry in self.configuration_vector:
-            entry["src_part"] += 2
-            entry["tgt_part"] += 2
-            # hack to make it thourhg paper time
-        self.root_idx = 0
+
+        self.root_idx = root_idx
 
     def update_part_poses_with_configuration(self, configuration_params, joint_config_values, part_idx = 0, part_poses = None, visited_parts = []):
         print(f"visited parts a: {visited_parts}")
@@ -105,10 +103,6 @@ class ArticulatedSplatManager(torch.nn.Module):
             self.splat_manager.parts_gauss_params[idx]["tf_quats"] = tf_quats[idx]
             self.splat_manager.parts_gauss_params[idx]["tf_trans"] = tf_trans[idx]
 
-        # self.splat_manager.parts_gauss_params[0]["tf_quats"] = tf_quats[0]
-        # self.splat_manager.parts_gauss_params[0]["tf_trans"] = tf_trans[0]
-        # self.splat_manager.parts_gauss_params[1]["tf_quats"] = tf_quats[1]
-        # self.splat_manager.parts_gauss_params[1]["tf_trans"] = tf_trans[1]
         # render the object
         return self.splat_manager.render_parts_at_campose(cam_pose, cam_intrinsic, width, height, part_idxs)
 

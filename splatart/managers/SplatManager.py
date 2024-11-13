@@ -144,6 +144,33 @@ class SplatManager(torch.nn.Module):
             )
             self.parts_gauss_params[i] = part_gauss_params
 
+    def set_part(self, part_key, part_gauss_params_dict):
+        self.parts_gauss_params[part_key] = torch.nn.ParameterDict(part_gauss_params_dict)
+
+    def means_quats_to_mat(self, means, quats):
+        to_return = torch.zeros((means.shape[0], 4, 4)).to(means)
+        to_return[:, :3, :3] = p3dt.quaternion_to_matrix(quats)
+        to_return[:, :3, 3] = means
+        to_return[:, 3, 3] = 1
+        return to_return
+
+    def get_neighbor_edges_distances_deltas(self, radius=0.02):
+        radius_scaled = radius * self.dataparser_scale
+        n_splats = self.object_gaussian_params["means"].shape[0]
+        means = self.object_gaussian_params["means"]
+        quats = self.object_gaussian_params["quats"]
+        tfs = self.means_quats_to_mat(means, quats)
+        for i in tqdm(range(n_splats)):
+            cur_mean = means[i]
+            cur_tf = tfs[i]
+            tfs_cur_frame = torch.linalg.inv(cur_tf) @ tfs
+            deltas = tfs_cur_frame[:, :3, 3]
+            distances = torch.norm(means - cur_mean, dim=1)
+            neighbors = torch.nonzero(distances < radius_scaled)
+            for neighbor in neighbors:
+                if(neighbor != i):
+                    yield (int(i), int(neighbor)), distances[neighbor], deltas[neighbor]
+
     def get_render_gauss_params(self, gauss_params, apply_transforms=True):
         # turn the quats and means into 4x4 matrices
         rots_base = p3dt.quaternion_to_matrix(gauss_params["quats"]) # 1, 3, 3
@@ -267,6 +294,8 @@ class SplatManager(torch.nn.Module):
             parts_gauss_params.append(self.parts_gauss_params[part_idx])
         return self.render_gauss_params_at_campose(cam_pose, cam_intrinsic, width, height, parts_gauss_params, apply_transforms = apply_transforms)
     
+    def render_given_parts_at_campose(self, cam_pose, cam_intrinsic, width, height, parts_gauss_params, apply_transforms=True):
+        return self.render_gauss_params_at_campose(cam_pose, cam_intrinsic, width, height, parts_gauss_params, apply_transforms = apply_transforms)
 
     def render_object_at_campose(self, cam_pose, cam_intrinsic, width, height, apply_transforms=True):
         return self.render_gauss_params_at_campose(cam_pose, cam_intrinsic, width, height, self.object_gaussian_params, apply_transforms = apply_transforms)

@@ -16,8 +16,8 @@
 # declare -a objects=("blade" "foldchair" "fridge" "laptop" "scissor" "stapler" "storage" "USB" "washer")
 # declare -a num_classes=(4 4 4 4 4 5 6 4 7)
 
-declare -a objects=("storage" "oven")
-declare -a num_classes=(6 11)
+declare -a objects=("USB")
+declare -a num_classes=(4)
 
 
 declare -a times=(0 1)

@@ -17,8 +17,8 @@
 # declare -a num_classes=(4 4 4 4 6 4 4)
 
 
-declare -a objects=("oven" "storage")
-declare -a num_classes=(11 6)
+declare -a objects=("USB")
+declare -a num_classes=(4)
 
 declare -a times=(0 1)
 
