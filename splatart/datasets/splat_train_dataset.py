@@ -5,7 +5,7 @@ import cv2 as cv
 import numpy as np
 
 class SplatTrainDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_json:str):
+    def __init__(self, dataset_json:str, use_semantics = False):
         self.config = json.load(open(dataset_json, "r"))
         self.base_dir = os.path.dirname(dataset_json)
         self.fl_x = self.config["fl_x"]
@@ -19,6 +19,7 @@ class SplatTrainDataset(torch.utils.data.Dataset):
         # self.gt_configurations = self.config["configurations"]
         self.image_cache = {}
         self.semantics_cache = {}
+        self.use_semantics = use_semantics
 
     def __len__(self):
         return len(self.dataframes)
@@ -41,19 +42,22 @@ class SplatTrainDataset(torch.utils.data.Dataset):
             rgb_data = torch.from_numpy(rgb_data)
             self.image_cache[idx] = rgb_data
 
-        if idx in self.semantics_cache.keys():
-            semantics_data = self.semantics_cache[idx]
-        else:
-            semantics_path = os.path.join(self.base_dir, frame["semantics_path"])
-            semantics_data = torch.from_numpy(cv.imread(semantics_path, cv.IMREAD_UNCHANGED).astype(np.int32))
-            self.semantics_cache[idx] = semantics_data
+        if(self.use_semantics):
+            if idx in self.semantics_cache.keys():
+                semantics_data = self.semantics_cache[idx]
+            else:
+                semantics_path = os.path.join(self.base_dir, frame["semantics_path"])
+                semantics_data = torch.from_numpy(cv.imread(semantics_path, cv.IMREAD_UNCHANGED).astype(np.int32))
+                self.semantics_cache[idx] = semantics_data
 
         camera_tf = torch.Tensor(frame["transform_matrix"])
 
         to_return = {
             "transform_matrix": camera_tf,
             "rgb": rgb_data,
-            "semantics": semantics_data
         }
+        
+        if(self.use_semantics):
+            to_return["semantics"] = semantics_data
 
         return idx, to_return

@@ -35,6 +35,9 @@ def means_quats_to_mat(means, quats):
     to_return[:, 3, 3] = 1
     return to_return
 
+def get_dataset(dataset_pth:str):
+    return SplatTrainDataset(dataset_pth)
+
 
 class PartsSeperator(torch.nn.Module):
     def __init__(self, num_parts, num_splats):
@@ -92,34 +95,50 @@ class PartsSeperator(torch.nn.Module):
 
         return src_part_trans, src_part_quats, dst_part_trans, dst_part_quats
 
-def cluster_models(base_model_pth:str, transformed_model_dir:str, other_model_dataset:str, n_parts:int = 2):
+def cluster_models(splat_tf_manager_pth:str, src_model_dataset:str, dst_model_dataset:str, n_parts:int = 2):
+    splat_tf_manager = torch.load(splat_tf_manager_pth)
 
-    writer = SummaryWriter(transformed_model_dir)
+    # get the directory which contains splat_tf_manager_pth
+    exp_dir = Path(splat_tf_manager_pth).parent
 
-    base_splat_manager = load_base_model(base_model_pth)
-    dataset = SplatTrainDataset(other_model_dataset)
-    dataset_len = dataset.__len__()
-    width = dataset.width
-    height = dataset.height
+    writer = SummaryWriter(exp_dir)
+
+    src_scene_dataset = get_dataset(src_model_dataset)
+    # tgt_scene_dataset = get_dataset(dst_model_dataset)
+    dataset_len = src_scene_dataset.__len__()
+    width = src_scene_dataset.width
+    height = src_scene_dataset.height
     print(f"Loaded dataset with {dataset_len} entries of height {height} and width {width}")
-    cam_intrinsic = torch.Tensor([[dataset.fl_x, 0, dataset.cx], [0, dataset.fl_y, dataset.cy], [0, 0, 1]])
-    render_data = dataset[0][1]
+    cam_intrinsic = torch.Tensor([[src_scene_dataset.fl_x, 0, src_scene_dataset.cx], [0, src_scene_dataset.fl_y, src_scene_dataset.cy], [0, 0, 1]])
+    render_data = src_scene_dataset[0][1]
     cam_pose = render_data["transform_matrix"].unsqueeze(0)
 
-    transformed_model_pth = os.path.join(transformed_model_dir, "splat_manager_transformed.pth")
-    tf_splat_manager = load_tf_model(transformed_model_pth)
+    part_learner = PartsSeperator(n_parts, splat_tf_manager.num_splats[0] + splat_tf_manager.num_splats[1])
 
-    base_means = base_splat_manager.object_gaussian_params["means"]
-    base_quats = base_splat_manager.object_gaussian_params["quats"]
-
-    tf_means = tf_splat_manager.object_gaussian_params["means"]
-    tf_quats = tf_splat_manager.object_gaussian_params["quats"]
-    # no grad to avoid auto grad complaining about running through the graph twice
+    # so autograd doesnt complain about running through the graph twice....
     with torch.no_grad():
-        base_tfs = means_quats_to_mat(base_means, base_quats)
-        tf_tfs = means_quats_to_mat(tf_means, tf_quats)
+        src_splat_means = splat_tf_manager.src_gauss_params["means"]
+        src_splat_quats = splat_tf_manager.src_gauss_params["quats"]
+        src_splat_tf_trans = splat_tf_manager.src_tf_trans
+        src_splat_tf_quats = splat_tf_manager.src_tf_quats
+        # print(f"means shape: {src_splat_means.shape} quats shape: {src_splat_quats.shape}")
+        # print(f"splat tf trans shape: {src_splat_tf_trans.shape}, splat tf quats shape: {src_splat_tf_quats.shape}")
+        src_splat_frames = means_quats_to_mat(src_splat_means, src_splat_quats)
+        src_splat_tfs = means_quats_to_mat(src_splat_tf_trans, src_splat_tf_quats)
 
-    part_learner = PartsSeperator(n_parts, base_means.shape[0])
+        print(f"src splat frames shape: {src_splat_frames.shape}")
+        print(f"src splat tfs shape: {src_splat_tfs.shape}")
+
+        dst_splat_means = splat_tf_manager.dst_gauss_params["means"]
+        dst_splat_quats = splat_tf_manager.dst_gauss_params["quats"]
+        dst_splat_tf_trans = splat_tf_manager.dst_tf_trans
+        dst_splat_tf_quats = splat_tf_manager.dst_tf_quats
+        dst_splat_frames = means_quats_to_mat(dst_splat_means, dst_splat_quats)
+        dst_splat_tfs = means_quats_to_mat(dst_splat_tf_trans, dst_splat_tf_quats)
+
+        src_splat_tfs_temp = torch.concat((src_splat_frames, torch.linalg.inv(dst_splat_tfs) @ dst_splat_frames))
+        dst_splat_tfs = torch.concat((src_splat_tfs @ src_splat_frames, dst_splat_frames))
+        src_splat_tfs = src_splat_tfs_temp # lazy and dont want to make the renaming refactor dance
 
     n_epochs = 10000
 
@@ -128,7 +147,7 @@ def cluster_models(base_model_pth:str, transformed_model_dir:str, other_model_da
 
     for epoch in range(n_epochs):
         optimizer.zero_grad()
-        loss = part_learner.forward_and_loss(base_tfs, tf_tfs)
+        loss = part_learner.forward_and_loss(src_splat_tfs, dst_splat_tfs)
         writer.add_scalar("clustering loss", loss, epoch)
         loss.backward()
         optimizer.step()
@@ -136,85 +155,44 @@ def cluster_models(base_model_pth:str, transformed_model_dir:str, other_model_da
         print(f"Epoch {epoch} loss: {loss}")
 
     part_assignments = part_learner.get_part_assignments()
-    src_part_trans, src_part_quats, dst_part_trans, dst_part_quats = part_learner.get_part_trans_quats()
-
-    # empty the splat part gaussian params before repopulating
-    base_splat_manager.num_parts = n_parts
-    tf_splat_manager.num_parts = n_parts
-
-    # base_splat_manager.parts_gauss_params = {}
-    # tf_splat_manager.parts_gauss_params = {}
-
+    src_scene_gauss_params = splat_tf_manager.get_scene_gauss_parameters(scene=0)
     for part_idx in range(n_parts):
-        object_gaussian_params = base_splat_manager.object_gaussian_params
-        dst_object_gaussian_params = tf_splat_manager.object_gaussian_params
-
         part_gaussian_params = {
-                    "means": object_gaussian_params["means"][part_assignments == part_idx],
-                    "scales": object_gaussian_params["scales"][part_assignments == part_idx],
-                    "quats": object_gaussian_params["quats"][part_assignments == part_idx],
-                    "features_dc": object_gaussian_params["features_dc"][part_assignments == part_idx],
-                    "features_rest": object_gaussian_params["features_rest"][part_assignments == part_idx],
-                    "opacities": object_gaussian_params["opacities"][part_assignments == part_idx],
-                    "features_semantics": object_gaussian_params["features_semantics"][part_assignments == part_idx]\
-                        if "features_semantics" in object_gaussian_params.keys()\
-                        else None,
-                    "tf_quats": src_part_quats[part_idx, :].to(object_gaussian_params["quats"]),
-                    "tf_trans": src_part_trans[part_idx, :].to(object_gaussian_params["means"]),
+                    "means": src_scene_gauss_params["means"][part_assignments == part_idx],
+                    "scales": src_scene_gauss_params["scales"][part_assignments == part_idx],
+                    "quats": src_scene_gauss_params["quats"][part_assignments == part_idx],
+                    "features_dc": src_scene_gauss_params["features_dc"][part_assignments == part_idx],
+                    "features_rest": src_scene_gauss_params["features_rest"][part_assignments == part_idx],
+                    "opacities": src_scene_gauss_params["opacities"][part_assignments == part_idx]
                 }
-        dst_part_gaussian_params = {
-                    "means": dst_object_gaussian_params["means"][part_assignments == part_idx],
-                    "scales": dst_object_gaussian_params["scales"][part_assignments == part_idx],
-                    "quats": dst_object_gaussian_params["quats"][part_assignments == part_idx],
-                    "features_dc": dst_object_gaussian_params["features_dc"][part_assignments == part_idx],
-                    "features_rest": dst_object_gaussian_params["features_rest"][part_assignments == part_idx],
-                    "opacities": dst_object_gaussian_params["opacities"][part_assignments == part_idx],
-                    "features_semantics": dst_object_gaussian_params["features_semantics"][part_assignments == part_idx]\
-                        if "features_semantics" in dst_object_gaussian_params.keys()\
-                        else None,
-                    "tf_quats": dst_part_quats[part_idx, :].to(dst_object_gaussian_params["quats"]),
-                    "tf_trans": dst_part_trans[part_idx, :].to(dst_object_gaussian_params["means"]),
-                }
+        render_results = splat_tf_manager.render_gauss_params_at_campose(cam_pose, cam_intrinsic, width, height, part_gaussian_params, scene=0)
+        writer.add_images(f"part {part_idx} render", render_results[0][0, ...,:3], epoch, dataformats="HWC")
         
-        base_render_rgb, _, _ = base_splat_manager.render_gauss_params_at_campose(cam_pose, cam_intrinsic, width, height, part_gaussian_params)
-        writer.add_images(f"part_{part_idx}", base_render_rgb, epoch, dataformats="NHWC")
-
-        dst_render_rgb, _, _ = tf_splat_manager.render_gauss_params_at_campose(cam_pose, cam_intrinsic, width, height, dst_part_gaussian_params)
-        writer.add_images(f"part_{part_idx}_dst", dst_render_rgb, epoch, dataformats="NHWC")
-
-        # add the gauss params to the splat managers part gaussian params
-        base_splat_manager.set_part(part_idx, part_gaussian_params)
-        tf_splat_manager.set_part(part_idx, dst_part_gaussian_params)
-
-
-    print(f"saving base splat manager gauss params: {base_splat_manager}")
-    # save the resulting splat managers
-    manager_path = os.path.join(transformed_model_dir, f"init_src_splat_manager.pth")
-    torch.save(base_splat_manager, manager_path)
-    print(f"saving tf splat manager gauss params: {tf_splat_manager}")
-    manager_path = os.path.join(transformed_model_dir, f"init_dst_splat_manager.pth")
-    torch.save(tf_splat_manager, manager_path)
-
     
 if __name__ == "__main__":
     print("Clustering the parts between base splat and transformed scene...")
 
     parser = argparse.ArgumentParser(description="Given an entry in the Sapien object set, generate a NARF dataset (images, masks, etc.)")
 
-    parser.add_argument('--input_model_pth', 
+    parser.add_argument('--splat_tf_manager_pth', 
                         type=str,
                         help='pre-trained splat for source of clusters',
                         default="")
     
-    parser.add_argument('--transformed_model_dir', 
+    parser.add_argument('--src_model_dataset',
                         type=str,
-                        help='pre-trained, transformed splat to cluster against',
+                        help="directory of the base scene's dataset",
                         default="")
     
-    parser.add_argument('--other_model_dataset',
+    parser.add_argument('--dst_model_dataset',
                         type=str,
                         help="directory of the other scene's dataset",
                         default="")
     
+    parser.add_argument('--n_parts',
+                        type=int,
+                        help="number of parts to separate into",
+                        default=2)
+    
     args = parser.parse_args()
-    cluster_models(args.input_model_pth, args.transformed_model_dir, args.other_model_dataset)
+    cluster_models(args.splat_tf_manager_pth, args.src_model_dataset, args.dst_model_dataset, args.n_parts)
