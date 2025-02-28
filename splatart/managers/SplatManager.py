@@ -73,6 +73,32 @@ def load_managers_nerfstudio(input_model_dirs:list[str],\
         
     return splat_managers
 
+def load_managers_nerfstudio_single(input_model_dirs:list[str],\
+                num_classes:int,\
+                config_yml:str = "config.yml",\
+                dataparser_tf:str = "dataparser_transforms.json",\
+                ns_base_path:str = "/home/stanlew/src/nerfstudio_splatart/"):
+    
+    splat_managers = []
+    i = 0
+    for model_dir in input_model_dirs:
+        trainer_config, pipeline, ckpt_path = load_model(model_dir, config_yml, ns_base_path)
+
+        splat_gaussian_params = pipeline.model.gauss_params
+        splat_sh_degree = pipeline.model.config.sh_degree
+        splat_rasterize_mode = pipeline.model.config.rasterize_mode
+
+        dataparser_tf_path = Path(os.path.join(model_dir, dataparser_tf))
+        dataparser_json = json.load(open(dataparser_tf_path, "r"))
+        dataparser_tf_matrix = torch.Tensor(dataparser_json["transform"])
+        # append a row to make it 4x4
+        dataparser_tf_matrix = torch.cat([dataparser_tf_matrix, torch.Tensor([[0, 0, 0, 1]])], dim=0)
+        dataparser_scale = dataparser_json["scale"]
+        manager = SplatManagerSingle(splat_gaussian_params, splat_sh_degree, splat_rasterize_mode, num_classes, dataparser_tf_matrix, dataparser_scale)
+        splat_managers.append(manager)
+        
+    return splat_managers
+
 def load_managers(input_model_dirs:list[str],\
                 managers_subdir:str = "outputs",\
                 manager_prefix:str = "splat_manager"):
@@ -84,6 +110,102 @@ def load_managers(input_model_dirs:list[str],\
         manager = torch.load(manager_path)
         splat_managers.append(manager)
     return splat_managers
+
+def means_quats_to_mat(means, quats):
+    to_return = torch.zeros((means.shape[0], 4, 4)).to(means)
+    to_return[:, :3, :3] = p3dt.quaternion_to_matrix(quats)
+    to_return[:, :3, 3] = means
+    to_return[:, 3, 3] = 1
+    return to_return
+
+def mat_to_means_quats(mat):
+    means = mat[:, :3, 3]
+    quats = p3dt.matrix_to_quaternion(mat[:, :3, :3])
+    return means, quats
+
+class SplatManagerSingle():
+    # constructor
+    def __init__(self, gauss_params, sh_degree, rasterize_mode, num_parts, dataparser_tf_matrix, dataparser_scale, *args, **kwargs):
+        self.object_gaussian_params = gauss_params
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.sh_degree = sh_degree
+        self.rasterize_mode = rasterize_mode
+        self.num_parts = num_parts
+        self.add_parts_features()
+        self.dataparser_tf_matrix = dataparser_tf_matrix.to(self.device)
+        self.dataparser_scale = dataparser_scale
+
+    def add_parts_features(self):
+        self.object_gaussian_params["features_semantics"] = \
+            torch.zeros(self.object_gaussian_params["means"].shape[0], self.num_parts).to(self.device)
+        
+    def render_gauss_params_at_campose(self, cam_pose, cam_intrinsic, width, height, gauss_params, is_semantics = False):
+        # if cam_pose doesnt have a batch dimension, add one
+        if len(cam_pose.shape) == 2:
+            cam_pose = cam_pose.unsqueeze(0)
+
+        # transfom the matrix to the model's space
+        pose_model = torch.matmul(self.dataparser_tf_matrix, cam_pose)
+        pose_model[..., :3, 3] *= self.dataparser_scale
+        
+        viewmat = get_viewmat(pose_model)
+
+        BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
+
+        features_dc = gauss_params["features_dc"]
+        features_rest = gauss_params["features_rest"]
+        colors = torch.cat((features_dc[:, None, :], features_rest), dim=1)
+
+        # render the rgb data
+        if(not is_semantics):
+            render, alpha, info = gsplat.rasterization(
+                means = gauss_params["means"].cuda(),
+                quats = gauss_params["quats"].cuda(),
+                scales = torch.exp(gauss_params["scales"]).cuda(),
+                opacities=torch.sigmoid(gauss_params["opacities"]).squeeze(-1).cuda(),
+                colors = colors.cuda(),
+                viewmats=viewmat.cuda(), #pose_model[None, :, :].cuda(), #[B, 4, 4]
+                Ks = cam_intrinsic[None, :, :].cuda() if len(cam_intrinsic.shape) == 2 else cam_intrinsic.cuda(), #[B, 3, 3]
+                width=width,
+                height=height,
+                tile_size=BLOCK_WIDTH,
+                packed=False,
+                near_plane=0.01,
+                far_plane=1e10,
+                render_mode="RGB",
+                sh_degree=self.sh_degree,
+                sparse_grad=False,
+                absgrad=True,
+                rasterize_mode=self.rasterize_mode,
+            )
+        else:
+            render, alpha, info = gsplat.rasterization(
+                means = gauss_params["means"].cuda(),
+                quats = gauss_params["quats"].cuda(),
+                scales = torch.exp(gauss_params["scales"]).cuda(),
+                opacities=torch.sigmoid(gauss_params["opacities"]).squeeze(-1).cuda(),
+                colors = gauss_params["features_semantics"].cuda(),
+                viewmats=viewmat.cuda(),
+                Ks = cam_intrinsic[None, :, :].cuda() if len(cam_intrinsic.shape) == 2 else cam_intrinsic.cuda(), #[B, 3, 3]
+                width=width,
+                height=height,
+                tile_size=BLOCK_WIDTH,
+                packed=False,
+                near_plane=0.01,
+                far_plane=1e10,
+                render_mode="RGB",
+                sh_degree=None,
+                sparse_grad=False,
+                absgrad=True,
+                rasterize_mode=self.rasterize_mode,
+            )
+
+        return render, alpha, info
+    
+    
+    def render_at_campose(self, cam_pose, cam_intrinsic, width, height, is_semantics = False):
+        render_gauss_params = self.object_gaussian_params
+        return self.render_gauss_params_at_campose(cam_pose, cam_intrinsic, width, height, render_gauss_params, is_semantics)
 
 class SplatManager(torch.nn.Module):
     # constructor
@@ -147,19 +269,13 @@ class SplatManager(torch.nn.Module):
     def set_part(self, part_key, part_gauss_params_dict):
         self.parts_gauss_params[part_key] = torch.nn.ParameterDict(part_gauss_params_dict)
 
-    def means_quats_to_mat(self, means, quats):
-        to_return = torch.zeros((means.shape[0], 4, 4)).to(means)
-        to_return[:, :3, :3] = p3dt.quaternion_to_matrix(quats)
-        to_return[:, :3, 3] = means
-        to_return[:, 3, 3] = 1
-        return to_return
 
     def get_neighbor_edges_distances_deltas(self, radius=0.02):
         radius_scaled = radius * self.dataparser_scale
         n_splats = self.object_gaussian_params["means"].shape[0]
         means = self.object_gaussian_params["means"]
         quats = self.object_gaussian_params["quats"]
-        tfs = self.means_quats_to_mat(means, quats)
+        tfs = means_quats_to_mat(means, quats)
         for i in tqdm(range(n_splats)):
             cur_mean = means[i]
             cur_tf = tfs[i]
