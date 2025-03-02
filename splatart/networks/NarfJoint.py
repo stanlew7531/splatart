@@ -1,4 +1,5 @@
 import torch
+from tqdm import tqdm
 import numpy as np
 import yaml
 from typing import Optional
@@ -38,6 +39,13 @@ class SingleAxisJoint(NarfJoint):
         self.joint_params = torch.nn.Parameter(torch.zeros(num_scenes, 1))
         self.joint_axis = torch.nn.Parameter(torch.Tensor([0,0,1])) # default to z axis
 
+    def get_6dof_as_mat(self, tf_params):
+        tf_rot = p3dt.euler_angles_to_matrix(tf_params[:3], "XYZ") # (4, 4)
+        tf = torch.eye(4).to(tf_params.device)
+        tf[:3, :3] = tf_rot[:3, :3]
+        tf[:3, 3] = tf_params[3:6]
+        return tf
+
     def set_num_scenes(self, num_scenes: int):
         if(self.num_scenes == num_scenes):
             # same number of scenes so no change
@@ -67,11 +75,11 @@ class RevoluteJoint(SingleAxisJoint):
         self.post_tf = torch.nn.Parameter(torch.Tensor([0,0,0,0,0,0]))
 
     def get_gt_parameters(self):
-        return {"pre_tf": self.pre_tf, "post_tf": self.post_tf, "joint_params": self.joint_params}
+        return {"pre_tf": self.pre_tf, "post_tf": self.post_tf, "joint_params": self.joint_params, "joint_axis": self.joint_axis}
 
     # scene_parameters: torch.Tensor of shape (B, )
     def get_transform(self, scene_paramters: torch.Tensor):
-        initial_tf_rot = p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
+        initial_tf_rot = torch.eye(3).to(scene_paramters.device) #p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
         initial_tf = torch.eye(4).to(scene_paramters.device)
         initial_tf[:3, :3] = initial_tf_rot[:3, :3]
         initial_tf[:3, 3] = self.pre_tf[3:6]
@@ -83,7 +91,7 @@ class RevoluteJoint(SingleAxisJoint):
         rotation_tf = torch.eye(4).to(scene_paramters.device).repeat(scene_paramters.shape[0], 1, 1) # (B, 4, 4)
         rotation_tf[:, :3, :3] = p3dt.axis_angle_to_matrix(axis_angle) # (B, 3, 3)
 
-        final_tf_rot = p3dt.euler_angles_to_matrix(self.post_tf[:3], "XYZ") # (4, 4)
+        final_tf_rot = torch.eye(3).to(scene_paramters.device) #p3dt.euler_angles_to_matrix(self.post_tf[:3], "XYZ") # (4, 4)
         final_tf = torch.eye(4).to(scene_paramters.device)
         final_tf[:3, :3] = final_tf_rot[:3, :3]
         final_tf[:3, 3] = self.post_tf[3:6]        
@@ -110,11 +118,11 @@ class RevoluteJoint(SingleAxisJoint):
         poses_quats = p3dt.matrix_to_quaternion(poses[:, :3, :3])
         poses_trans = poses[:, :3, 3]
 
-        for epoch in range(1000):
+        for epoch in tqdm(range(1000)):
             optimizer.zero_grad()
             joint_params = torch.zeros_like(self.joint_params)
-            joint_params[1:] = self.joint_params[1:] # keep the rest of the params
-            transforms = self.get_transform(joint_params)
+            # joint_params[1:] = self.joint_params[1:] # keep the rest of the params - assume the base scene always has param 0
+            transforms = self.get_transform(self.joint_params)
 
             transforms_quats = p3dt.matrix_to_quaternion(transforms[:, :3, :3])
             transforms_trans = transforms[:, :3, 3]
@@ -137,7 +145,7 @@ class PrismaticJoint(SingleAxisJoint):
 
     # scene_parameters: torch.Tensor of shape (B,)
     def get_transform(self, scene_paramters: torch.Tensor):
-        initial_tf_rot = p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
+        initial_tf_rot = torch.eye(3).to(scene_paramters.device) #p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
         initial_tf = torch.eye(4).to(scene_paramters.device)
         initial_tf[:3, :3] = initial_tf_rot[:3, :3]
         initial_tf[:3, 3] = self.pre_tf[3:6]
@@ -169,11 +177,11 @@ class PrismaticJoint(SingleAxisJoint):
         poses_quats = p3dt.matrix_to_quaternion(poses[:, :3, :3])
         poses_trans = poses[:, :3, 3]
 
-        for epoch in range(1000):
+        for epoch in tqdm(range(1000)):
             optimizer.zero_grad()
-            joint_params = torch.zeros_like(self.joint_params)
-            joint_params[1:] = self.joint_params[1:] # keep the rest of the params
-            transforms = self.get_transform(joint_params)
+            joint_params = torch.zeros_like(self.joint_params, device=poses.device)
+            # joint_params[1:] = self.joint_params[1:] # keep the rest of the params - assume the base scene always has param 0
+            transforms = self.get_transform(self.joint_params)
 
             transforms_quats = p3dt.matrix_to_quaternion(transforms[:, :3, :3])
             transforms_trans = transforms[:, :3, 3]

@@ -118,10 +118,27 @@ def means_quats_to_mat(means, quats):
     to_return[:, 3, 3] = 1
     return to_return
 
+def means_eulers_to_mat(means, eulers):
+    to_return = torch.zeros((means.shape[0], 4, 4)).to(means)
+    to_return[:, :3, :3] = p3dt.euler_angles_to_matrix(eulers, "XYZ")
+    to_return[:, :3, 3] = means
+    to_return[:, 3, 3] = 1
+    return to_return
+
 def mat_to_means_quats(mat):
     means = mat[:, :3, 3]
     quats = p3dt.matrix_to_quaternion(mat[:, :3, :3])
     return means, quats
+
+def apply_mat_tf_to_gauss_params(mat, gauss_params):
+    means = gauss_params["means"]
+    quats = gauss_params["quats"]
+    params_mat = means_quats_to_mat(means, quats)
+    params_mat = torch.matmul(mat, params_mat)
+    means, quats = mat_to_means_quats(params_mat)
+    gauss_params["means"] = means
+    gauss_params["quats"] = quats
+    return gauss_params
 
 class SplatManagerSingle():
     # constructor

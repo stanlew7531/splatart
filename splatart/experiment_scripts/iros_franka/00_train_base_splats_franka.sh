@@ -15,7 +15,7 @@ for i in "${!objects[@]}"
             do
                 echo "$j"
                 cd ~/src/nerfstudio_splatart
-                ns-train splatfacto --data ${base_dir}/${objects[$i]}/transforms_$j.json --experiment_name iros_${objects[$i]} --timestamp config_$j --vis=viewer+tensorboard --pipeline.model.camera_optimizer.mode off --max-num-iterations 20000 --viewer.quit-on-train-completion True --pipeline.model.background_color white
+                ns-train splatfacto-big --data ${base_dir}/${objects[$i]}/transforms_$j.json --experiment_name iros_${objects[$i]} --timestamp config_$j --vis=viewer+tensorboard --pipeline.model.camera_optimizer.mode off --max-num-iterations 20000 --viewer.quit-on-train-completion True --pipeline.model.background_color random --pipeline.model.random_scale 0.1 --pipeline.model.cull_screen_size 0.5 --pipeline.model.cull_scale_thresh 1.3 --pipeline.model.background_color random --pipeline.model.cull_screen_size 0.5 --pipeline.model.cull_scale_thresh 1.3
             done
     done
 

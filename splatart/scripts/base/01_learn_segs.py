@@ -53,6 +53,17 @@ def generate_tensorboard_seg_viz(predicted_semantics, gt_semantics, gt_rgb, num_
     # combined_segmentation = torch.moveaxis(combined_segmentation, 0, -1)
     return combined_segmentation
 
+def empty_background_splats(splat_manager, background_part_id=0):
+    part_labels = torch.argmax(splat_manager.object_gaussian_params["features_semantics"], dim=1)
+
+    splat_manager.object_gaussian_params["means"] = splat_manager.object_gaussian_params["means"][part_labels != background_part_id]
+    splat_manager.object_gaussian_params["quats"] = splat_manager.object_gaussian_params["quats"][part_labels != background_part_id]
+    splat_manager.object_gaussian_params["features_semantics"] = splat_manager.object_gaussian_params["features_semantics"][part_labels != background_part_id]
+    splat_manager.object_gaussian_params["features_dc"] = splat_manager.object_gaussian_params["features_dc"][part_labels != background_part_id]
+    splat_manager.object_gaussian_params["features_rest"] = splat_manager.object_gaussian_params["features_rest"][part_labels != background_part_id]
+    splat_manager.object_gaussian_params["opacities"] = splat_manager.object_gaussian_params["opacities"][part_labels != background_part_id]
+    splat_manager.object_gaussian_params["scales"] = splat_manager.object_gaussian_params["scales"][part_labels != background_part_id]
+
 def learn_segmentations(manager_paths: list[str], dataset_paths: list[str], num_parts: int, output_dir: str, exp_name: str = ""):
     batch_size = 1
     splat_managers = [load_base_model(path, num_parts) for path in manager_paths]
@@ -93,7 +104,7 @@ def learn_segmentations(manager_paths: list[str], dataset_paths: list[str], num_
         width = cur_dataset.width
         height = cur_dataset.height
 
-        n_epochs = 10
+        n_epochs = 20
         for epoch in tqdm(range(n_epochs)):
             loss_total = 0
             for batch_idx, batch_data in tqdm(cur_dataloader, leave=False):
@@ -124,6 +135,10 @@ def learn_segmentations(manager_paths: list[str], dataset_paths: list[str], num_
             # update the scheduler
             scheduler.step()
         
+        # empty background splats (no grad since no more optimization is happening after this)
+        with torch.no_grad():
+            empty_background_splats(cur_manager, background_part_id=0)
+
         # save the updated manager
         save_fname = os.path.join(exp_dir, f"seg_learned_manager_{i}.pth")
         print(f"Saving learned manager {i} to {save_fname}...")

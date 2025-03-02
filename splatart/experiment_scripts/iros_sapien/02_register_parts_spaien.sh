@@ -2,7 +2,7 @@ declare splats_base_dir="results/iros_splatart_sapien" #/home/stanlew/src/nerfst
 declare data_base_dir="/home/stanlew/Desktop/narf_iros_data"
 
 declare -a objects=("blade" "foldchair" "fridge" "laptop" "oven" "scissor" "stapler" "storage" "USB" "washer")
-declare -a num_classes=(4 4 4 4 11 4 5 6 4 7)
+declare -a num_classes=(3 3 3 3 3 3 3 3 3 3)
 
 declare -a times=(0 1)
 current_dir="$(pwd)"

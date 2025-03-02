@@ -14,17 +14,25 @@ from tqdm import tqdm
 
 def setup_sapien():
     engine = sapien.Engine()
+    # enable ray tracing for better images
+    sapien.render.set_camera_shader_dir("rt")
+    sapien.render.set_viewer_shader_dir("rt")
+    sapien.render.set_ray_tracing_samples_per_pixel(256)
     renderer = sapien.SapienRenderer(offscreen_only=False)
     engine.set_renderer(renderer)
 
     scene = engine.create_scene()
     scene.set_timestep(1 / 100.)
 
-    scene.set_ambient_light([0.5, 0.5, 0.5])
+    # scene.set_ambient_light([0.2, 0.2, 0.2])
     scene.add_directional_light([0, 1, -1], [0.5, 0.5, 0.5])
-    scene.add_point_light([1, 2, 2], [1, 1, 1])
-    scene.add_point_light([1, -2, 2], [1, 1, 1])
-    scene.add_point_light([-1, 0, 2], [1, 1, 1])
+
+    scene.add_directional_light([1, 1, 0.5], [0.5, 0.5, 0.5])
+
+    scene.add_point_light([4.0762, 1.0055, 5.9039], [1, 1, 1])
+    scene.add_point_light([3.4154, 4.6753, 6.5981], [1, 1, 1])
+    scene.add_point_light([0.80797, -7.77557, 4.78247], [1, 1, 1])
+    scene.add_point_light([-4.96121, 1.9155, 9.01307], [1, 1, 1])
 
     return engine, renderer, scene
 
@@ -36,13 +44,15 @@ def get_urdf_path(input_sapien:str, obj_id:str):
 def load_urdf(scene, urdf_path:str):
     loader = scene.create_urdf_loader()
     loader.fix_root_link = True
-    object = loader.load_kinematic(urdf_path)
+    object = loader.load(urdf_path)
+    object.set_qf(object.compute_passive_force(gravity=True, coriolis_and_centrifugal=True))
     assert object, "Failed to load object from urdf"
     return object, loader
 
 def create_camera(scene):
     near, far = 0.1, 100
     width, height = 640, 480
+    
     camera = scene.add_camera(\
         name = "camera", \
         width = width, \
@@ -55,11 +65,10 @@ def create_camera(scene):
     return camera
 
 def render_image(scene, camera):
-    scene.step()
     scene.update_render()
     camera.take_picture()
-    rgba = camera.get_float_texture('Color') # [H, W, 4]
-    actor_labels = camera.get_visual_actor_segmentation()[..., 1] # [H, W]
+    rgba = camera.get_picture("Color") #camera.get_float_texture('Color') # [H, W, 4]
+    actor_labels = camera.get_picture("Segmentation")[...,1] #camera.get_visual_actor_segmentation()[..., 1] # [H, W]
     set_background_color(rgba, actor_labels, [1, 1, 1, 0]) # set the background color to transparent white (makes nerfstudio happy)
     return rgba, actor_labels
 
@@ -146,8 +155,9 @@ def get_object_config_minmax(obj):
     maxs = qlimits[:, 1]
     return mins, maxs
 
-def set_camera_pose(camera, pose):
-    camera.set_pose(sapien.Pose.from_transformation_matrix(pose))
+def set_camera_pose(camera, cam_t, cam_q):
+    # camera.set_pose(sapien.Pose.from_transformation_matrix(pose))
+    camera.set_pose(sapien.Pose(cam_t, cam_q))
 
 def set_background_color(rgba_img, segmentation_img, color):
     rgba_img[segmentation_img == 0] = color
@@ -161,6 +171,8 @@ def generate_dataset(input_sapien:str,\
                     sample_radius:float,\
                     output_dir:str,\
                     configurations_in=None):
+    
+    print(f"Generating dataset for {obj_name} with id {obj_id}")
     
     # initial setup of renderer etc.\
     output_dir = os.path.join(output_dir, obj_name)
@@ -207,19 +219,29 @@ def generate_dataset(input_sapien:str,\
         transforms_json_data["configurations"][i] = scene_configuration.tolist()
         print(f"current configuration: {obj.get_qpos()}, config in: {scene_configuration}")
         set_object_configuration(obj, scene_configuration)
+        sap_scene.step()
         print(f"after setting configuration: {obj.get_qpos()}")
         transforms_json_data["gt_part_world_poses"][i] = get_object_part_poses(obj)
         # print(f"Generating data for scene: {i} and configuration {scene_configuration}")
         # loop over samples
         for j in tqdm(range(scene_samples), desc="Generating samples", leave=False):
+            
+            set_object_configuration(obj, scene_configuration)
             tf_json_to_add = {}
             # theta_phi_sample = np.random.uniform(-180, 180, 2) # sample theta and phi
-            theta = np.random.uniform(-45, 45)
+            theta = np.random.uniform(45, -45)
             phi = np.random.uniform(-180, 180)
             # theta, phi = theta_phi_sample
             # tqdm.write(f"sample:{j}, theta:{theta}, phi:{phi}", end="\r")
             camera_position = np.linalg.inv(get_spherical_pose(sample_radius, theta, phi))
-            set_camera_pose(sap_cam, camera_position)
+            camera_trans = camera_position[:3, 3]
+            camera_rot = camera_position[:3, :3]
+            # turn camera_rot to quaternion
+            camera_rot = R.from_matrix(camera_rot)
+            camera_rot = camera_rot.as_quat()
+            # turn from xyzw to wxyz
+            camera_rot = np.array([camera_rot[3], camera_rot[0], camera_rot[1], camera_rot[2]])
+            set_camera_pose(sap_cam, camera_trans, camera_rot)
             rgba_render, actor_labels_render = render_image(sap_scene, sap_cam)
             rgba_fname, seg_fname, labels_fname, train_mask_fname = save_images(rgba_render, actor_labels_render, i, j, os.path.join(output_dir, str(i)))
             # need to get the transform between the SAPIEN world space and the NeRF world space
@@ -235,7 +257,7 @@ def generate_dataset(input_sapien:str,\
             tf_json_to_add["transform_matrix"] = (camera_position).tolist()
             tf_json_to_add["pose_idx"] = i
             tf_json_to_add["time"] = i
-            tf_json_to_add["mask_path"] = train_mask_fname
+            # tf_json_to_add["mask_path"] = train_mask_fname
             transforms_json_data["frames"].append(tf_json_to_add)
 
         # save the json file
