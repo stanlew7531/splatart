@@ -123,9 +123,9 @@ def save_images(rgba, actor_labels, scene_idx, sample_idx, output_dir):
 
     return rgba_fname, segmentation_fname, labels_fname, train_mask_output_fname
 
-def get_spherical_pose(radius, theta, phi):
+def get_spherical_pose(radius, theta, phi, z_height = 0.0):
     initial_pose = np.eye(4)
-    initial_pose[3,3] = 0.5 # slightly above the object
+    initial_pose[3,3] = z_height # slightly above the object
 
     # radius transform - move along the +x axis
     tf_radius = np.eye(4)
@@ -141,6 +141,27 @@ def get_spherical_pose(radius, theta, phi):
     # compose the matrices
     final_pose = tf_radius @ tf_theta @ tf_phi @ initial_pose
     return final_pose
+
+def get_pose_center_loot_at(position:np.array, look_at:np.array):
+    # get the camera pose
+    camera_pose = np.eye(4)
+    camera_pose[:3, 3] = position
+    
+    forward = look_at - position
+    forward /= np.linalg.norm(forward)
+    right = np.cross(np.array([0, 0, 1]), forward)
+    right /= np.linalg.norm(right)
+    up = np.cross(forward, right)
+    up /= np.linalg.norm(up)
+    camera_pose[:3, :3] = np.column_stack((forward, right, up))
+
+    return camera_pose
+
+def polar_to_cartesian(radius, theta, phi):
+    x = radius * np.sin(np.radians(phi)) * np.cos(np.radians(theta))
+    y = radius * np.sin(np.radians(phi)) * np.sin(np.radians(theta))
+    z = radius * np.cos(np.radians(phi))
+    return np.array([x, y, z])
 
 def set_object_configuration(obj, qpos):
     obj.set_qpos(qpos)
@@ -241,11 +262,12 @@ def generate_dataset(urdf_path:str,\
             set_object_configuration(obj, scene_configuration)
             tf_json_to_add = {}
             # theta_phi_sample = np.random.uniform(-180, 180, 2) # sample theta and phi
-            theta = np.random.uniform(45, -45)
-            phi = np.random.uniform(-180, 180)
+            theta = np.random.uniform(-180, 180)
+            phi = np.random.uniform(-10, 90)
             # theta, phi = theta_phi_sample
             # tqdm.write(f"sample:{j}, theta:{theta}, phi:{phi}", end="\r")
-            camera_position = np.linalg.inv(get_spherical_pose(sample_radius, theta, phi))
+            # camera_position = np.linalg.inv(get_spherical_pose(sample_radius, theta, phi, z_height=10.0))
+            camera_position = get_pose_center_loot_at(polar_to_cartesian(sample_radius, theta, phi), np.array([0.,0.,0.5]))
             camera_trans = camera_position[:3, 3]
             camera_rot = camera_position[:3, :3]
             # turn camera_rot to quaternion

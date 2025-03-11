@@ -18,7 +18,7 @@ from scipy.spatial.transform import Rotation as R
 from sklearn.cluster import HDBSCAN
 import pytorch3d.transforms as p3dt
 
-from splatart.managers.SplatManager import SplatManagerSingle, load_managers, means_quats_to_mat, mat_to_means_quats
+from splatart.managers.SplatManager import SplatManagerSingle, load_managers, means_quats_to_mat, mat_to_means_quats, apply_mat_tf_to_gauss_params
 from splatart.datasets.splat_train_dataset import SplatTrainDataset
 from splatart.networks.PoseEstimator import PoseEstimator
 
@@ -129,15 +129,15 @@ def learn_poses(manager_paths: list[str], dataset_paths: list[str], icp_json=Non
     #         {"params": optimization_params_trans, "lr": 1e-3},
     #         {"params": optimization_params_rot, "lr": 1e-3}
         # ])
-    optimizer_splats = torch.optim.Adam(splat_opt_params, lr=1e-3)
-    optimizer_trans = torch.optim.Adam(optimization_params_trans, lr=1e-2)
-    optimizer_rot = torch.optim.Adam(optimization_params_rot, lr=1e-2)
+    optimizer_splats = torch.optim.Adam(splat_opt_params, lr=1e-4)
+    optimizer_trans = torch.optim.Adam(optimization_params_trans, lr=1e-3)
+    optimizer_rot = torch.optim.Adam(optimization_params_rot, lr=1e-3)
 
     # create the scheduler
     # scheduler = lr_scheduler.StepLR(optimizer_joint, step_size=100, gamma=0.5)
 
 
-    n_epochs = 60
+    n_epochs = 150
 
     for epoch in tqdm(range(n_epochs)):
         print(f"Epoch {epoch}")
@@ -195,6 +195,16 @@ def learn_poses(manager_paths: list[str], dataset_paths: list[str], icp_json=Non
                     viz_render_rgb.append(viz_gt_rgb)
                     combined_rgb = torchvision.utils.make_grid(torch.cat(viz_render_rgb, dim=0), nrow=batch_size)
                     writer.add_image(f"rgb_{i}_scene", combined_rgb, epoch)
+            
+            if(epoch % 25 == 0):
+                # save the current state of the pose estimator
+                save_fname = os.path.join(exp_dir, f"pose_estimator_{epoch}.pth")
+                print(f"Saving learned pose estimator to {save_fname}...")
+                torch.save(pose_estimator, save_fname)
+                # save the current state of the splat manager
+                save_fname = os.path.join(exp_dir, f"part_gauss_params_{epoch}.pth")
+                print(f"Saving learned part gauss params to {save_fname}...")
+                torch.save(object_parts_gauss_params, save_fname)
                 
             writer.add_scalar(f"scene_{i} loss", total_scene_loss, epoch)
         writer.add_scalar("total loss", total_loss, epoch)

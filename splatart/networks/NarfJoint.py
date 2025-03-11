@@ -7,6 +7,33 @@ import warnings
 import pytorch3d.transforms as p3dt
 # from splatart.utils.lie_utils import SE3, SE3Exp, SO3Exp
 
+def tree_create_tfs_from_config(configuration_vector, root_part_idx, configuration_values, num_parts = None, part_poses = None):
+    assert len(configuration_vector) == len(configuration_values), f"configuration vector and values must be the same length, got {len(configuration_vector)} and {len(configuration_values)}"
+    
+    # start all parts at identity
+    if(part_poses is None):
+        part_poses = torch.eye(4).repeat(num_parts, 1, 1).to(configuration_values.device) # (N, 4, 4)
+
+    frontier = []
+    for joint_idx in range(len(configuration_vector)):
+        entry = configuration_vector[joint_idx]
+        if entry["src_part"] == root_part_idx:
+            print(f"operating on src part: {entry['src_part']}")
+            tgt_part = entry["tgt_part"]
+            print(f"got target part: {tgt_part}")
+            frontier.append(tgt_part)
+            joint_obj = entry["predicted_joint"]
+            joint_params = configuration_values[joint_idx].unsqueeze(0) # (1, )
+            joint_tf = joint_obj.get_transform(joint_params.to("cuda:0")) # (N, 4, 4)
+            print(f"predicted joint tf: {joint_tf}")
+            # apply the joint_tf to the target part
+            part_poses[tgt_part] = part_poses[root_part_idx] @ joint_tf
+    
+    for tgt_entry in frontier:
+        tree_create_tfs_from_config(configuration_vector, tgt_entry, configuration_values, num_parts, part_poses)
+
+    return part_poses
+
 class NarfJoint(torch.nn.Module):
     def __init__(self, num_scenes:int):
         super().__init__()
@@ -78,21 +105,24 @@ class RevoluteJoint(SingleAxisJoint):
         return {"pre_tf": self.pre_tf, "post_tf": self.post_tf, "joint_params": self.joint_params, "joint_axis": self.joint_axis}
 
     # scene_parameters: torch.Tensor of shape (B, )
-    def get_transform(self, scene_paramters: torch.Tensor):
-        initial_tf_rot = torch.eye(3).to(scene_paramters.device) #p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
-        initial_tf = torch.eye(4).to(scene_paramters.device)
+    def get_transform(self, scene_parameters: torch.Tensor):
+        initial_tf_rot = torch.eye(3).to(scene_parameters.device) #
+        # initial_tf_rot = p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
+        initial_tf = torch.eye(4).to(scene_parameters.device)
         initial_tf[:3, :3] = initial_tf_rot[:3, :3]
         initial_tf[:3, 3] = self.pre_tf[3:6]
 
         # make sure its normalized first - amount of rotation is taken as the magnitude of the vector
         axis_angle = self.joint_axis / torch.norm(self.joint_axis) # (3, )
-        axis_angle = axis_angle.repeat(scene_paramters.shape[0], 1)
-        axis_angle = axis_angle * scene_paramters # (B, 3)
-        rotation_tf = torch.eye(4).to(scene_paramters.device).repeat(scene_paramters.shape[0], 1, 1) # (B, 4, 4)
+        # axis_angle = torch.tensor([0, 0, 1]).to(scene_parameters.device) # (3, )
+        axis_angle = axis_angle.repeat(scene_parameters.shape[0], 1)
+        axis_angle = axis_angle * scene_parameters # (B, 3)
+        rotation_tf = torch.eye(4).to(scene_parameters.device).repeat(scene_parameters.shape[0], 1, 1) # (B, 4, 4)
         rotation_tf[:, :3, :3] = p3dt.axis_angle_to_matrix(axis_angle) # (B, 3, 3)
 
-        final_tf_rot = torch.eye(3).to(scene_paramters.device) #p3dt.euler_angles_to_matrix(self.post_tf[:3], "XYZ") # (4, 4)
-        final_tf = torch.eye(4).to(scene_paramters.device)
+        # final_tf_rot = torch.eye(3).to(scene_parameters.device)
+        final_tf_rot = p3dt.euler_angles_to_matrix(self.post_tf[:3], "XYZ") # (4, 4)
+        final_tf = torch.eye(4).to(scene_parameters.device)
         final_tf[:3, :3] = final_tf_rot[:3, :3]
         final_tf[:3, 3] = self.post_tf[3:6]        
 
@@ -114,15 +144,15 @@ class RevoluteJoint(SingleAxisJoint):
 
         self.num_scenes = poses.shape[0]
 
-        optimizer = torch.optim.Adam( [self.pre_tf, self.joint_axis, self.post_tf, self.joint_params], lr=0.001)
+        optimizer = torch.optim.Adam( [self.pre_tf, self.joint_axis, self.post_tf, self.joint_params], lr=0.0025)
         poses_quats = p3dt.matrix_to_quaternion(poses[:, :3, :3])
         poses_trans = poses[:, :3, 3]
 
-        for epoch in tqdm(range(1000)):
+        for epoch in tqdm(range(3000), leave=False):
             optimizer.zero_grad()
             joint_params = torch.zeros_like(self.joint_params)
-            # joint_params[1:] = self.joint_params[1:] # keep the rest of the params - assume the base scene always has param 0
-            transforms = self.get_transform(self.joint_params)
+            joint_params[1:] = self.joint_params[1:] # keep the rest of the params - assume the base scene always has param 0
+            transforms = self.get_transform(joint_params)
 
             transforms_quats = p3dt.matrix_to_quaternion(transforms[:, :3, :3])
             transforms_trans = transforms[:, :3, 3]
@@ -131,10 +161,50 @@ class RevoluteJoint(SingleAxisJoint):
             loss.backward()
             optimizer.step()
             # print(f"Epoch: {epoch}, pretf: {self.pre_tf}, joint axis: {self.joint_axis}, params: {self.joint_params}, Loss: {loss.item()}")
+        
+        with torch.no_grad():
+            # set the axis to be the normalized version of itself
+            self.joint_axis /= torch.norm(self.joint_axis)
     
     def get_initial_estimate(self, poses:torch.Tensor):
         self.configuration_estimation(poses)
+
+class FixedJoint(SingleAxisJoint):
+    def __init__(self, num_scenes:int):
+        super().__init__(num_scenes)
+
+    def get_gt_parameters(self):
+        return {"pre_tf": self.pre_tf, "joint_axis": self.joint_axis, "joint_params": self.joint_params}
+    
+    def get_transform(self, scene_paramters:torch.Tensor):
+        return self.pre_tf
+    
+    def get_scene_transform(self, scene_idx:torch.Tensor):
+        return self.pre_tf
+    
+    def configuration_estimation(self, poses:torch.Tensor):
+        self.num_scenes = poses.shape[0]
+
+        optimizer = torch.optim.Adam( [self.pre_tf], lr=0.002)
+
+        poses_quats = p3dt.matrix_to_quaternion(poses[:, :3, :3])
+        poses_trans = poses[:, :3, 3]
+
+        for epoch in tqdm(range(500), leave=False):
+            optimizer.zero_grad()
+            joint_params = torch.zeros_like(self.joint_params, device=poses.device)
+            joint_params[1:] = self.joint_params[1:] # keep the rest of the params - assume the base scene always has param 0
+            transforms = self.get_transform(joint_params)
+
+            transforms_quats = p3dt.matrix_to_quaternion(transforms[:, :3, :3])
+            transforms_trans = transforms[:, :3, 3]
+            loss = (5 * torch.mean(torch.norm(poses_quats - transforms_quats, dim=1)) + 
+                    torch.mean(torch.norm(poses_trans - transforms_trans, dim=1)))
+            loss.backward()
+            optimizer.step()
         
+    def get_initial_estimate(self, poses:torch.Tensor):
+        self.configuration_estimation(poses)
 
 class PrismaticJoint(SingleAxisJoint):
     def __init__(self, num_scenes:int):
@@ -144,18 +214,18 @@ class PrismaticJoint(SingleAxisJoint):
         return {"pre_tf": self.pre_tf, "joint_axis": self.joint_axis, "joint_params": self.joint_params}
 
     # scene_parameters: torch.Tensor of shape (B,)
-    def get_transform(self, scene_paramters: torch.Tensor):
-        initial_tf_rot = torch.eye(3).to(scene_paramters.device) #p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
-        initial_tf = torch.eye(4).to(scene_paramters.device)
+    def get_transform(self, scene_parameters: torch.Tensor):
+        initial_tf_rot = torch.eye(3).to(scene_parameters.device) #p3dt.euler_angles_to_matrix(self.pre_tf[:3], "XYZ") # (4, 4)
+        initial_tf = torch.eye(4).to(scene_parameters.device)
         initial_tf[:3, :3] = initial_tf_rot[:3, :3]
         initial_tf[:3, 3] = self.pre_tf[3:6]
 
         # make sure its normalized first - amount of rotation is taken as the magnitude of the vector
         axis_translate = self.joint_axis / torch.norm(self.joint_axis) # (3, )
-        axis_translate = axis_translate.repeat(scene_paramters.shape[0], 1)
-        axis_translate = axis_translate * scene_paramters # (B, 3)
+        axis_translate = axis_translate.repeat(scene_parameters.shape[0], 1)
+        axis_translate = axis_translate * scene_parameters # (B, 3)
 
-        translation_tf = torch.eye(4).to(scene_paramters.device).repeat(scene_paramters.shape[0], 1, 1) # (B, 4, 4)
+        translation_tf = torch.eye(4).to(scene_parameters.device).repeat(scene_parameters.shape[0], 1, 1) # (B, 4, 4)
         translation_tf[:, :3, 3] = axis_translate # (B, 3)
 
         # compose the transforms
@@ -173,15 +243,16 @@ class PrismaticJoint(SingleAxisJoint):
     def configuration_estimation(self, poses:torch.Tensor):
         self.num_scenes = poses.shape[0]
 
-        optimizer = torch.optim.Adam( [self.pre_tf, self.joint_axis, self.joint_params], lr=0.001)
+        optimizer = torch.optim.Adam( [self.pre_tf, self.joint_axis, self.joint_params], lr=0.002)
+        # optimizer = torch.optim.Adam( [self.joint_axis, self.joint_params], lr=0.001)
         poses_quats = p3dt.matrix_to_quaternion(poses[:, :3, :3])
         poses_trans = poses[:, :3, 3]
 
-        for epoch in tqdm(range(1000)):
+        for epoch in tqdm(range(500), leave=False):
             optimizer.zero_grad()
             joint_params = torch.zeros_like(self.joint_params, device=poses.device)
-            # joint_params[1:] = self.joint_params[1:] # keep the rest of the params - assume the base scene always has param 0
-            transforms = self.get_transform(self.joint_params)
+            joint_params[1:] = self.joint_params[1:] # keep the rest of the params - assume the base scene always has param 0
+            transforms = self.get_transform(joint_params)
 
             transforms_quats = p3dt.matrix_to_quaternion(transforms[:, :3, :3])
             transforms_trans = transforms[:, :3, 3]
@@ -189,7 +260,11 @@ class PrismaticJoint(SingleAxisJoint):
                     torch.mean(torch.norm(poses_trans - transforms_trans, dim=1)))
             loss.backward()
             optimizer.step()
-            # print(f"Epoch: {epoch}, pretf: {self.pre_tf}, 
+            # print(f"Epoch: {epoch}, pretf: {self.pre_tf},
+        
+        with torch.no_grad():
+            # set the axis to be the normalized version of itself
+            self.joint_axis /= torch.norm(self.joint_axis)
     
     def get_initial_estimate(self, poses:torch.Tensor):
         self.configuration_estimation(poses)

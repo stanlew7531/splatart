@@ -20,6 +20,7 @@ declare -a parts_to_combine=("1,3,4,5" "2,3")
 declare -a times=(0 1)
 current_dir="$(pwd)"
 
+
 for i in "${!objects[@]}"
     do
         echo "$i"
@@ -33,4 +34,5 @@ for i in "${!objects[@]}"
             --splat_tf_manager_pths ${splats_base_dir}/iros_sapien_${objects[$i]}/splatfacto/config_0,${splats_base_dir}/iros_sapien_${objects[$i]}/splatfacto/config_1 \
             --splat_model_datasets ${data_base_dir}/master/${objects[$i]}/0/transforms.json,${data_base_dir}/master/${objects[$i]}/1/transforms.json \
             --n_parts ${num_classes[$i]} --output_dir results/iros_splatart_sapien/ --exp_name ${objects[$i]}
+        &
     done

@@ -23,10 +23,9 @@ from sklearn.cluster import HDBSCAN
 import pytorch3d.transforms as p3dt
 
 from splatart.managers.SplatManager import SplatManagerSingle, load_managers, means_quats_to_mat, mat_to_means_quats, apply_mat_tf_to_gauss_params
-from splatart.networks.NarfJoint import RevoluteJoint, PrismaticJoint, tree_create_tfs_from_config
+from splatart.networks.NarfJoint import RevoluteJoint, PrismaticJoint
 from splatart.datasets.splat_train_dataset import SplatTrainDataset
 from splatart.networks.PoseEstimator import PoseEstimator
-from splatart.utils.helpers import gauss_params_to_ply
 
 def load_articulation_estimates(articulation_estimates_path:str):
     # get joint for joint metrics.
@@ -97,12 +96,6 @@ def render_images(object_name:str,\
     _, inspection_data = dataset[0]
     gt_cam_pose = inspection_data["transform_matrix"].to(device="cuda:0")
 
-    # static camera for figure generation
-    gt_cam_pose = torch.Tensor([[ 6.6417e-01,  4.8176e-01, -5.7165e-01, -2.2294e+00],
-        [-7.4758e-01,  4.2801e-01, -5.0787e-01, -1.9807e+00],
-        [-5.8196e-17,  7.6467e-01,  6.4443e-01,  2.5133e+00],
-        [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]]).to(device="cuda:0")
-
     cam_intrinsic = torch.Tensor([[dataset.fl_x, 0, dataset.cx],\
                                 [0, dataset.fl_y, dataset.cy],\
                                 [0, 0, 1]])
@@ -113,66 +106,43 @@ def render_images(object_name:str,\
 
     # get the set of each parts gaussians for transformation
 
-    # the gaussian parameters for each part, in its own frame
     part_frames, scene_part_frame_gauss_params = pose_estimates.get_part_splat_frames(recon_part_splats)
-    canonical_part_frames = part_frames[canonical_scene_id]
-    canonical_part_frame_gauss_params = scene_part_frame_gauss_params[canonical_scene_id]
+    recon_part_splats = recon_part_splats[canonical_scene_id]
+
     # get the joint between the static and dynamic part
     joint = articulation_estimates[0]["predicted_joint"]
     # get min and max articulations
     joint_params = joint.joint_params
-    print(f"joint params: {joint_params}")
     min_value = joint_params.min()
-    max_value = joint_params.max()
-    print(f"joint: {joint}, min val: {min_value}, max val: {max_value}")
-    n_steps = 30
+    max_value = joint_params.max() * -1
+    print(f"joint: {joint}")
+    n_steps = 9
     values = torch.linspace(min_value, max_value, n_steps).unsqueeze(-1).to(joint_params.device)
+    part_tfs = joint.get_transform(values)
 
-    print(f"values size: {values.shape}")
+    src_part_gauss = recon_part_splats[static_recon_part_id]
+    tgt_part_gauss = recon_part_splats[dynamic_recon_part_id]
 
-    # if the lenght of the estimated joints is over 1, then we just append 0 as the value for every other joint
-    if(len(articulation_estimates) > 1):
-        to_append = torch.zeros([n_steps, len(articulation_estimates) - 1]).to(joint_params.device)
-        values = torch.cat([values, to_append], dim=-1)
+    # put parts back into part frame
+    src_part_gauss = apply_mat_tf_to_gauss_params(part_frames[0, static_recon_part_id], src_part_gauss)
+    # tgt_part_gauss = apply_mat_tf_to_gauss_params(part_frames[0, dynamic_recon_part_id], tgt_part_gauss)
+    
+    for i in range(n_steps):
+        part_tf = part_tfs[i]
 
-    print(f"values: {values}")
-    # values = torch.ones([1,1]).to(joint_params.device) * max_value
-    # values = torch.zeros(1, 1).to(joint_params.device)
-    static_recon_part_id = 1
+        new_tgt_part_gauss = tgt_part_gauss.copy()
+        new_tgt_part_gauss = apply_mat_tf_to_gauss_params(part_tf, new_tgt_part_gauss)
+        render_splats = combine_guass_params([src_part_gauss, new_tgt_part_gauss])
 
-    # get the initial pose for the static recon part
-    # print(f"for static part {static_recon_part_id}, the initial pose is {canonical_part_frames[static_recon_part_id]}")
-
-    i = 0
-    root_part_frame = canonical_part_frames[static_recon_part_id].clone()
-    # repeat the root part frame for each part
-    root_part_frame = root_part_frame.unsqueeze(0).expand(n_parts, -1, -1)
-    print(f"art values: {values}")
-    print(f"articulation estimate: {articulation_estimates}")
-    for value in values:
-        print(f"articulation value: {value}")
-        # get the estimated transforms for each part idx
-        part_poses = tree_create_tfs_from_config(articulation_estimates, static_recon_part_id, value, n_parts, part_poses=root_part_frame.clone()) # clone is just to prevent pass by ref/val issues
-        # apply the part poses to each canonical part
-        render_gauss_params = []
-        for part_idx in range(1, n_parts): # 1 because ignore background
-            transformed_part_params = apply_mat_tf_to_gauss_params(part_poses[part_idx], canonical_part_frame_gauss_params[part_idx].copy())
-            render_gauss_params.append(transformed_part_params)
-
-        # combine the gauss params into a single object
-        render_gauss_params = combine_guass_params(render_gauss_params)
-        # render the gauss params at gt_camera_pose
         render_image_results = splat_managers[0].render_gauss_params_at_campose(\
-                    gt_cam_pose, cam_intrinsic.expand(batch_size, -1, -1), width, height, render_gauss_params, is_semantics=False)
-        x
+                    gt_cam_pose, cam_intrinsic.expand(batch_size, -1, -1), width, height, render_splats, is_semantics=False)
+                    
+            
         render = render_image_results[0]
         image = render[0].detach().cpu().numpy()
-        out_fname = os.path.join(output_dir, f"rendered_image_{i:02d}.png")
+        out_fname = os.path.join(output_dir, f"rendered_image_{i}.png")
         os.makedirs(output_dir, exist_ok=True)
         cv.imwrite(out_fname, image[:,:,::-1] * 255.0)
-        i += 1
-        print(f"rendered image {i} to {out_fname}")
-                    
 
 
 

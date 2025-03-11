@@ -10,6 +10,7 @@ from typing import Optional
 import pytorch3d.transforms as p3dt
 
 from splatart.utils.lie_utils import SE3, SE3Exp
+from splatart.networks.NarfJoint import RevoluteJoint, PrismaticJoint, SingleAxisJoint
 
 import gsplat
 
@@ -125,16 +126,31 @@ def means_eulers_to_mat(means, eulers):
     to_return[:, 3, 3] = 1
     return to_return
 
+def mat_to_means_eulers(mat):
+    means = mat[:, :3, 3]
+    eulers = p3dt.matrix_to_euler_angles(mat[:, :3, :3], "XYZ")
+    return means, eulers
+
 def mat_to_means_quats(mat):
     means = mat[:, :3, 3]
     quats = p3dt.matrix_to_quaternion(mat[:, :3, :3])
     return means, quats
 
-def apply_mat_tf_to_gauss_params(mat, gauss_params):
+def clone_gauss_params(gauss_params):
+    # clone the gauss params so we can modify them without affecting the original
+    to_ret={}
+    for key in gauss_params.keys():
+        to_ret[key] = gauss_params[key].clone()
+
+    return to_ret
+
+def apply_mat_tf_to_gauss_params(mat, gauss_params, inplace=True):
+    if inplace == False:
+        gauss_params = clone_gauss_params(gauss_params)
     means = gauss_params["means"]
     quats = gauss_params["quats"]
     params_mat = means_quats_to_mat(means, quats)
-    params_mat = torch.matmul(mat, params_mat)
+    params_mat = mat @ params_mat
     means, quats = mat_to_means_quats(params_mat)
     gauss_params["means"] = means
     gauss_params["quats"] = quats
@@ -155,6 +171,26 @@ class SplatManagerSingle():
     def add_parts_features(self):
         self.object_gaussian_params["features_semantics"] = \
             torch.zeros(self.object_gaussian_params["means"].shape[0], self.num_parts).to(self.device)
+    
+    def get_part_gaussians(self):
+        to_return = []
+
+        part_labels = torch.argmax(self.object_gaussian_params["features_semantics"], dim=1)
+        for part_idx in range(self.num_parts):
+            to_append = {
+                "means": self.object_gaussian_params["means"][part_labels == part_idx],
+                "quats": self.object_gaussian_params["quats"][part_labels == part_idx],
+                "features_semantics": self.object_gaussian_params["features_semantics"][part_labels == part_idx],
+                "features_dc": self.object_gaussian_params["features_dc"][part_labels == part_idx],
+                "features_rest": self.object_gaussian_params["features_rest"][part_labels == part_idx],
+                "opacities": self.object_gaussian_params["opacities"][part_labels == part_idx],
+                "scales": self.object_gaussian_params["scales"][part_labels == part_idx],
+            }
+        to_append["means"].requires_grad = True
+        to_append["quats"].requires_grad = True
+        to_return.append(to_append)
+
+        return to_return
         
     def render_gauss_params_at_campose(self, cam_pose, cam_intrinsic, width, height, gauss_params, is_semantics = False):
         # if cam_pose doesnt have a batch dimension, add one

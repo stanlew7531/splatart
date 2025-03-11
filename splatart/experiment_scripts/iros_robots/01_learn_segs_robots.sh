@@ -5,8 +5,16 @@ declare -a objects=("panda")
 declare -a num_classes=(12)
 declare -a parts_to_combine=("1")
 
+
+
+declare -a objects=("kinova_dual")
+declare -a num_classes=(27)
+
+declare -a objects=("irb1600")
+declare -a num_classes=(8)
+
 declare -a objects=("fanuc")
-declare -a num_classes=(12)
+declare -a num_classes=(11)
 
 declare -a times=(0 1)
 current_dir="$(pwd)"

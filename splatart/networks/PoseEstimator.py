@@ -58,9 +58,13 @@ class PoseEstimator():
                 quats = object_parts_gauss_params[scene_i][part_i]["quats"]
                 # quats.register_hook(lambda grad: print("got to quats grad: {grad}"))
                 mat = means_quats_to_mat(means, quats)
-                
                 mat = torch.linalg.inv(part_frames[scene_i][part_i]) @ mat
+
+                new_means, new_quats = mat_to_means_quats(mat)
+                
                 gauss_params = {
+                    "means": new_means,
+                    "quats": new_quats,
                     "features_semantics": object_parts_gauss_params[scene_i][part_i]["features_semantics"],
                     "features_dc": object_parts_gauss_params[scene_i][part_i]["features_dc"],
                     "features_rest": object_parts_gauss_params[scene_i][part_i]["features_rest"],

@@ -20,6 +20,20 @@ class SplatTrainDataset(torch.utils.data.Dataset):
         self.image_cache = {}
         self.semantics_cache = {}
         self.use_semantics = use_semantics
+        self.gt_poses = {}
+        self.gt_configuration = {}
+        if("gt_part_world_poses" in self.config):
+            self.gt_poses = self.config["gt_part_world_poses"]
+            gt_poses_key = list(self.gt_poses.keys())[0]
+            self.gt_poses = self.gt_poses[gt_poses_key]
+            poses_result = []
+            for key in self.gt_poses.keys():
+                poses_result.append(self.gt_poses[key])
+            self.gt_poses = poses_result
+        if("configurations" in self.config):
+            self.gt_configuration = self.config["configurations"]
+            gt_config_key = list(self.gt_configuration.keys())[0]
+            self.gt_configuration = self.gt_configuration[gt_config_key]
 
     def __len__(self):
         return len(self.dataframes)

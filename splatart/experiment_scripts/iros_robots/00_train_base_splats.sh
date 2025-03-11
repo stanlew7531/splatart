@@ -4,6 +4,12 @@ declare -a num_classes=(12)
 declare -a objects=("fanuc")
 declare -a num_classes=(12)
 
+declare -a objects=("kinova_dual")
+declare -a num_classes=(24)
+
+declare -a objects=("irb1600")
+declare -a num_classes=(8)
+
 declare -a times=(0 1)
 current_dir="$(pwd)"
 

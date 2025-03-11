@@ -1,0 +1,5 @@
+. splatart/experiment_scripts/iros_sapien/00_train_base_splats_sapien.sh
+. splatart/experiment_scripts/iros_sapien/01_learn_segs_sapien.sh
+. splatart/experiment_scripts/iros_sapien/02_register_parts_sapien.sh
+. splatart/experiment_scripts/iros_sapien/03a_estimate_joints_render_sapien.sh
+. splatart/experiment_scripts/iros_sapien/04_compute_metrics_sapien.sh

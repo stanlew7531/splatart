@@ -26,7 +26,7 @@ from splatart.managers.SplatManager import SplatManagerSingle, load_managers, me
 from splatart.networks.NarfJoint import RevoluteJoint, PrismaticJoint, tree_create_tfs_from_config
 from splatart.datasets.splat_train_dataset import SplatTrainDataset
 from splatart.networks.PoseEstimator import PoseEstimator
-from splatart.utils.helpers import gauss_params_to_ply
+from splatart.utils.helpers import gauss_params_to_ply, combine_guass_params
 
 def load_articulation_estimates(articulation_estimates_path:str):
     # get joint for joint metrics.
@@ -46,31 +46,6 @@ def load_pose_estimator(pose_estimates_path:str)->PoseEstimator:
 def get_dataset(dataset_pth:str):
     return SplatTrainDataset(dataset_pth, use_semantics=True)
 
-def combine_guass_params(gauss_params_list):
-        combined_gauss_params = []
-        object_gauss_params = {
-            "means": gauss_params_list[0]["means"],
-            "quats": gauss_params_list[0]["quats"],
-            "features_semantics": gauss_params_list[0]["features_semantics"],
-            "features_dc": gauss_params_list[0]["features_dc"],
-            "features_rest": gauss_params_list[0]["features_rest"],
-            "opacities": gauss_params_list[0]["opacities"],
-            "scales": gauss_params_list[0]["scales"],
-        }
-
-        for part_i in range(1, len(gauss_params_list)):
-            if part_i == 0:
-                continue
-            object_gauss_params["means"] = torch.cat((object_gauss_params["means"], gauss_params_list[part_i]["means"]), dim=0)
-            object_gauss_params["quats"] = torch.cat((object_gauss_params["quats"], gauss_params_list[part_i]["quats"]), dim=0)
-            object_gauss_params["features_semantics"] = torch.cat((object_gauss_params["features_semantics"], gauss_params_list[part_i]["features_semantics"]), dim=0)
-            object_gauss_params["features_dc"] = torch.cat((object_gauss_params["features_dc"], gauss_params_list[part_i]["features_dc"]), dim=0)
-            object_gauss_params["features_rest"] = torch.cat((object_gauss_params["features_rest"], gauss_params_list[part_i]["features_rest"]), dim=0)
-            object_gauss_params["opacities"] = torch.cat((object_gauss_params["opacities"], gauss_params_list[part_i]["opacities"]), dim=0)
-            object_gauss_params["scales"] = torch.cat((object_gauss_params["scales"], gauss_params_list[part_i]["scales"]), dim=0)
-
-        return object_gauss_params
-
 def render_images(object_name:str,\
                     manager_paths,\
                     dataset_paths,\
@@ -79,9 +54,7 @@ def render_images(object_name:str,\
                     articuation_estimates_path,\
                     output_dir,\
                     canonical_scene_id=0,\
-                    static_recon_part_id=1,\
-                    dynamic_recon_part_id=2,\
-                    sapien_root_dir="/media/stanlew/Data/paris_dataset/dataset/data/sapien"):
+                    root_part_id=1):
     torch.set_grad_enabled(False)
     splat_managers = [load_base_model(path) for path in manager_paths]
     dataparser_scales = [splatmanager.dataparser_scale for splatmanager in splat_managers]
@@ -94,14 +67,14 @@ def render_images(object_name:str,\
     
     splat_datasets = [get_dataset(path) for path in dataset_paths]
     dataset = splat_datasets[0]
-    _, inspection_data = dataset[0]
+    _, inspection_data = dataset[30]
     gt_cam_pose = inspection_data["transform_matrix"].to(device="cuda:0")
 
     # static camera for figure generation
-    gt_cam_pose = torch.Tensor([[ 6.6417e-01,  4.8176e-01, -5.7165e-01, -2.2294e+00],
-        [-7.4758e-01,  4.2801e-01, -5.0787e-01, -1.9807e+00],
-        [-5.8196e-17,  7.6467e-01,  6.4443e-01,  2.5133e+00],
-        [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]]).to(device="cuda:0")
+    # gt_cam_pose = torch.Tensor([[ 6.6417e-01,  4.8176e-01, -5.7165e-01, -2.2294e+00],
+    #     [-7.4758e-01,  4.2801e-01, -5.0787e-01, -1.9807e+00],
+    #     [-5.8196e-17,  7.6467e-01,  6.4443e-01,  2.5133e+00],
+    #     [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]]).to(device="cuda:0")
 
     cam_intrinsic = torch.Tensor([[dataset.fl_x, 0, dataset.cx],\
                                 [0, dataset.fl_y, dataset.cy],\
@@ -118,53 +91,49 @@ def render_images(object_name:str,\
     canonical_part_frames = part_frames[canonical_scene_id]
     canonical_part_frame_gauss_params = scene_part_frame_gauss_params[canonical_scene_id]
     # get the joint between the static and dynamic part
-    joint = articulation_estimates[0]["predicted_joint"]
-    # get min and max articulations
-    joint_params = joint.joint_params
-    print(f"joint params: {joint_params}")
-    min_value = joint_params.min()
-    max_value = joint_params.max()
-    print(f"joint: {joint}, min val: {min_value}, max val: {max_value}")
+    # joint = articulation_estimates[0]["predicted_joint"]
+    joint_params_start = torch.tensor([articulation_estimates[i]["predicted_joint"].joint_params[0] for i in range(len(articulation_estimates))])
+    joint_params_end = torch.tensor([articulation_estimates[i]["predicted_joint"].joint_params[1] for i in range(len(articulation_estimates))])
+    
     n_steps = 30
-    values = torch.linspace(min_value, max_value, n_steps).unsqueeze(-1).to(joint_params.device)
+    joint_deltas = joint_params_end - joint_params_start
+    joint_steps = joint_deltas / (n_steps - 1)
+    joint_params = joint_params_start + joint_steps * torch.arange(n_steps).unsqueeze(1).to(joint_params_start.device)
+    joint_deltas_2 = joint_params_start - joint_params_end
+    joint_steps_2 = joint_deltas_2 / (n_steps - 1)
+    joint_params_2 = joint_params_end + joint_steps_2 * torch.arange(n_steps).unsqueeze(1).to(joint_params_end.device)
 
-    print(f"values size: {values.shape}")
+    joint_params = torch.cat([joint_params, joint_params_2], dim=0)
 
-    # if the lenght of the estimated joints is over 1, then we just append 0 as the value for every other joint
-    if(len(articulation_estimates) > 1):
-        to_append = torch.zeros([n_steps, len(articulation_estimates) - 1]).to(joint_params.device)
-        values = torch.cat([values, to_append], dim=-1)
-
-    print(f"values: {values}")
-    # values = torch.ones([1,1]).to(joint_params.device) * max_value
-    # values = torch.zeros(1, 1).to(joint_params.device)
-    static_recon_part_id = 1
+    root_part_id = 1
 
     # get the initial pose for the static recon part
     # print(f"for static part {static_recon_part_id}, the initial pose is {canonical_part_frames[static_recon_part_id]}")
 
     i = 0
-    root_part_frame = canonical_part_frames[static_recon_part_id].clone()
+    root_part_frame = canonical_part_frames[root_part_id].clone()
     # repeat the root part frame for each part
     root_part_frame = root_part_frame.unsqueeze(0).expand(n_parts, -1, -1)
-    print(f"art values: {values}")
+    starting_part_poses = canonical_part_frames.clone()
+    print(f"art values: {joint_params}")
     print(f"articulation estimate: {articulation_estimates}")
-    for value in values:
+    for value in joint_params:
         print(f"articulation value: {value}")
         # get the estimated transforms for each part idx
-        part_poses = tree_create_tfs_from_config(articulation_estimates, static_recon_part_id, value, n_parts, part_poses=root_part_frame.clone()) # clone is just to prevent pass by ref/val issues
+        part_poses = tree_create_tfs_from_config(articulation_estimates, root_part_id, value, n_parts, part_poses=starting_part_poses) # clone is just to prevent pass by ref/val issues
         # apply the part poses to each canonical part
         render_gauss_params = []
-        for part_idx in range(1, n_parts): # 1 because ignore background
+        for part_idx in range(1,n_parts): # 1 because ignore background
             transformed_part_params = apply_mat_tf_to_gauss_params(part_poses[part_idx], canonical_part_frame_gauss_params[part_idx].copy())
             render_gauss_params.append(transformed_part_params)
+            gauss_params_to_ply(transformed_part_params, os.path.join(output_dir, f"render_part_{part_idx}_gauss_params_{i}.ply"))
 
         # combine the gauss params into a single object
         render_gauss_params = combine_guass_params(render_gauss_params)
         # render the gauss params at gt_camera_pose
         render_image_results = splat_managers[0].render_gauss_params_at_campose(\
                     gt_cam_pose, cam_intrinsic.expand(batch_size, -1, -1), width, height, render_gauss_params, is_semantics=False)
-        x
+        
         render = render_image_results[0]
         image = render[0].detach().cpu().numpy()
         out_fname = os.path.join(output_dir, f"rendered_image_{i:02d}.png")
@@ -206,15 +175,10 @@ if __name__=="__main__":
                         help="pickle of the learned articulations",
                         default="")
     
-    parser.add_argument('--static_part_id',
+    parser.add_argument('--root_part_id',
                         type=int,
                         help="id of the static part",
-                        default=2)
-    
-    parser.add_argument('--dyn_part_id',
-                        type=int,
-                        help="id of the dynamic part",
-                        default=3)
+                        default=1)
     
     parser.add_argument('--output_dir',
                         type=str,
@@ -229,4 +193,4 @@ if __name__=="__main__":
     args = parser.parse_args()
     manager_paths = args.manager_paths.split(",")
     dataset_paths = args.splat_model_datasets.split(",")
-    render_images(args.object_name, manager_paths, dataset_paths, args.part_splats, args.pose_estimates, args.articulation_estimates, args.output_dir, static_recon_part_id=args.static_part_id, dynamic_recon_part_id=args.dyn_part_id, )
+    render_images(args.object_name, manager_paths, dataset_paths, args.part_splats, args.pose_estimates, args.articulation_estimates, args.output_dir, root_part_id=args.root_part_id )

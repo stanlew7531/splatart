@@ -63,22 +63,6 @@ def load_articulation_estimates(articulation_estimates_path:str):
         config_vector = pkl.load(f)
     return config_vector
 
-
-# Get canonical parts from obj files
-# Read .ply file
-paris_to_sapien = {
-    'blade': '103706',
-    'laptop': '10211',
-    'foldchair': '102255',
-    'oven': '101917',
-    'fridge': '10905',
-    'scissor': '11100',
-    'stapler': '103111',
-    'USB': '100109',
-    'washer': '103776',
-    'storage': '45135'
-}
-
 # adapted from https://github.com/nerfstudio-project/gsplat/issues/234#issuecomment-2197277211
 def gauss_params_to_ply(gauss_params, output_fname):
 
@@ -113,59 +97,6 @@ def gauss_params_to_ply(gauss_params, output_fname):
         output_fname += '.ply'
     PlyData([el]).write(output_fname)
 
-# function gets the underlying sapien mesh data for the parts/objects we care about for later comparison
-def load_sapien_data(object_name:str, sapien_root_dir="/media/stanlew/Data/paris_dataset/dataset/data/sapien"):
-    sapien_dir = os.path.join(sapien_root_dir, object_name, paris_to_sapien[object_name], "textured_objs")
-
-    start_dir = os.path.join(sapien_dir, "start")
-    end_dir = os.path.join(sapien_dir, "end")
-    trans_json_fname = os.path.join(sapien_dir,"trans.json")
-    trans_json_data = json.load(open(trans_json_fname, 'r'))
-
-    # correct for convention differences between sapien and reconstruction
-    R = o3d.geometry.get_rotation_matrix_from_xyz((0, 0, -np.pi/2,))
-
-    start_whole_ply_fname = os.path.join(start_dir, "start_rotate.ply")
-    start_whole_ply = o3d.io.read_triangle_mesh(start_whole_ply_fname)
-    start_whole_ply.rotate(R, center=(0, 0, 0))
-    start_static_ply_fname = os.path.join(start_dir, "start_static_rotate.ply")
-    start_static_ply = o3d.io.read_triangle_mesh(start_static_ply_fname)
-    start_static_ply.rotate(R, center=(0, 0, 0))
-    start_dynamic_ply_fname = os.path.join(start_dir, "start_dynamic_rotate.ply")
-    start_dynamic_ply = o3d.io.read_triangle_mesh(start_dynamic_ply_fname)
-    start_dynamic_ply.rotate(R, center=(0, 0, 0))
-
-    end_whole_ply_fname = os.path.join(end_dir, "end_rotate.ply")
-    end_whole_ply = o3d.io.read_triangle_mesh(end_whole_ply_fname)
-    end_whole_ply.rotate(R, center=(0, 0, 0))
-    end_static_ply_fname = os.path.join(end_dir, "end_static_rotate.ply")
-    end_static_ply = o3d.io.read_triangle_mesh(end_static_ply_fname)
-    end_static_ply.rotate(R, center=(0, 0, 0))
-    end_dynamic_ply_fname = os.path.join(end_dir, "end_dynamic_rotate.ply")
-    end_dynamic_ply = o3d.io.read_triangle_mesh(end_dynamic_ply_fname)
-    end_dynamic_ply.rotate(R, center=(0, 0, 0))
-
-    plys_to_return = {
-        "start":{"whole": start_whole_ply, "static": start_static_ply, "dynamic": start_dynamic_ply},
-        "end":{"whole": end_whole_ply, "static": end_static_ply, "dynamic": end_dynamic_ply}
-    }
-
-    # get the joint parameter information from the json data
-    joint_type = trans_json_data["input"]["motion"]["type"]
-    joint_param_ends = trans_json_data["input"]["motion"][joint_type]
-    joint_param_ends = np.array(joint_param_ends)
-
-    joint_axis_origin = trans_json_data["trans_info"]["axis"]["o"]
-    joint_axis_direction = trans_json_data["trans_info"]["axis"]["d"]
-
-    joint_axis_origin = np.array(joint_axis_origin)
-    joint_axis_direction = np.array(joint_axis_direction)
-
-    # rotate the joint axis dir to match the convention change
-    joint_axis_direction = R @ joint_axis_direction
-
-    return plys_to_return, joint_param_ends, joint_axis_origin, joint_axis_direction
-
 def get_chamfer_distance_metric(recon_ply, gt_ply, sample_pts=10000):
     num_means = len(recon_ply.points)
     if num_means < sample_pts:
@@ -188,31 +119,32 @@ def get_chamfer_distance_metric(recon_ply, gt_ply, sample_pts=10000):
 
 def compute_metrics(object_name:str,\
                     manager_paths,\
+                    transforms_jsons,\
                     part_splats_path,\
                     part_splats_normalized_path,\
                     pose_estimates_path,\
                     articuation_estimates_path,\
                     output_dir,\
                     canonical_scene_id=0,\
-                    static_recon_part_id=2,\
-                    dynamic_recon_part_id=3,\
-                    sapien_root_dir="/media/stanlew/Data/paris_dataset/dataset/data/sapien"):
+                    root_part_id=1):
     torch.set_grad_enabled(False)
     # get the data from our reconstruction
     print(f"loading our reconstruction...")
     splat_managers = [load_base_model(path) for path in manager_paths]
     dataparser_scales = [splatmanager.dataparser_scale for splatmanager in splat_managers]
     dataparser_tf_matrices = [splatmanager.dataparser_tf_matrix for splatmanager in splat_managers]
-    print(f"dataparser tf matric start: {dataparser_tf_matrices[0]}")
+    transforms_jsons_data = [json.load(open(path)) for path in transforms_jsons]
+    gt_configuration_values = []
+    gt_part_pose_values = []
+    for scene_idx in range(len(transforms_jsons_data)):
+        gt_configuration_values.append(transforms_jsons_data[scene_idx]["configurations"][str(scene_idx)])
+        gt_part_pose_values.append(transforms_jsons_data[scene_idx]["gt_part_world_poses"][str(scene_idx)])
+
     n_parts = splat_managers[0].num_parts
     recon_part_splats = load_part_gaussians(part_splats_path)
     recon_part_splats_normalized = load_part_gaussians(part_splats_normalized_path)
     pose_estimates = load_pose_estimator(pose_estimates_path)
     articulation_estimates = load_articulation_estimates(articuation_estimates_path)
-
-    # get the object data from sapien dataset
-    print(f"loading sapien data...")
-    sapien_plys, sapien_joint_params, sapien_axis_origin, sapien_axis_direction = load_sapien_data(object_name, sapien_root_dir)
 
     # get our part splats out and convert them to ply's
     print(f"converting our reconstruction to ply...")
@@ -220,79 +152,33 @@ def compute_metrics(object_name:str,\
                                                                 recon_part_splats,\
                                                                 dataparser_tf_matrices,\
                                                                 dataparser_scales) # n_parts, (gauss_params)
-    os.makedirs("tmp", exist_ok=True)
+    
+    print(f"len of articulations: {len(articulation_estimates)}")
+    print(f"len of config vector: {len(gt_configuration_values[0])}")
+    print(f"len of config vector1: {len(gt_configuration_values[1])}")
+    for articulation_idx in range(len(articulation_estimates)):
+        # get the joint param at scene 0,1 and subtract
+        gt_config_0 = gt_configuration_values[0][articulation_idx]
+        gt_config_1 = gt_configuration_values[1][articulation_idx]
+        predicted_joint = articulation_estimates[articulation_idx]["predicted_joint"]
+        gt_part_motion = np.abs(gt_config_0 - gt_config_1)
+        joint_params = predicted_joint.joint_params.cpu().detach().numpy()
 
-    # bit of a hack - we save the plys to disk so that we can then load them back
-    # and compute the metrics on them
-    recon_plys = []
-    for i in tqdm(range(n_parts)):
-        gauss_params_to_ply(recon_canonical_part_gaussians[i], f"tmp/part_{i}.ply")
-        recon_plys.append(o3d.io.read_point_cloud(f"tmp/part_{i}.ply"))
-
-    whole_recon_ply = o3d.io.read_point_cloud(f"tmp/part_{static_recon_part_id}.ply")
-    whole_recon_ply.points.extend(recon_plys[dynamic_recon_part_id].points)
-    o3d.io.write_point_cloud(f"tmp/whole_recon.ply", whole_recon_ply)
-
-    # uncomment if we want to inspect the GT plys in blender or whatever next to the recon
-    # o3d.io.write_triangle_mesh(f"tmp/gt_part_start_static.ply", sapien_plys["start"]["static"])
-    # o3d.io.write_triangle_mesh(f"tmp/gt_part_start_dynamic.ply", sapien_plys["start"]["dynamic"])
-
-    cd_s = get_chamfer_distance_metric(recon_plys[static_recon_part_id], sapien_plys["start"]["static"])
-    print(f"Chamfer distance for static part: {cd_s}")
-    cd_d = get_chamfer_distance_metric(recon_plys[dynamic_recon_part_id], sapien_plys["start"]["dynamic"])
-    print(f"Chamfer distance for dynamic part: {cd_d}")
-    cd_w = get_chamfer_distance_metric(whole_recon_ply, sapien_plys["start"]["whole"])
-    print(f"Chamfer distance for whole body: {cd_w}")
-
-    # part motion and joint metrics
-    gt_part_motion = np.abs(sapien_joint_params[0] - sapien_joint_params[1])
-
-    # get our estimated articulation
-    for joint in articulation_estimates:
-        src_part = joint["src_part"]
-        tgt_part = joint["tgt_part"]
-        print(f"src part: {src_part}, tgt part: {tgt_part}")
-        if(src_part == static_recon_part_id and tgt_part == dynamic_recon_part_id):
-            # check if we have a prismatic or revolute joint
-            predicted_joint = joint["predicted_joint"]
-            joint_params = predicted_joint.joint_params.cpu().detach().numpy()
-            joint_pre_tf = predicted_joint.get_6dof_as_mat(predicted_joint.pre_tf)
-            joint_axis = predicted_joint.joint_axis
-
-            # check the type of predicted_joint
-            if(type(predicted_joint) == PrismaticJoint):
+        if(type(predicted_joint) == PrismaticJoint):
                 # have to scale prismatic joint params by the dataparser scale
                 joint_params /= dataparser_scales[canonical_scene_id]
-            if(type(predicted_joint) == RevoluteJoint):
-                joint_pre_tf = predicted_joint.get_6dof_as_mat(predicted_joint.post_tf)
-                # turn the joint params into degrees
-                joint_params = joint_params * 180.0 / np.pi
-            pred_part_motion = np.abs(joint_params[0] - joint_params[1])
-            
-            # transform the pre_tf by the dataparser matrix
-            joint_dp_tf = torch.linalg.inv(dataparser_tf_matrices[canonical_scene_id]) @ joint_pre_tf
-            # have to scale the joint_pre_tf by the dataparser scale
-            joint_dp_tf /= dataparser_scales[canonical_scene_id]
-            est_joint_origin = joint_dp_tf[:3, 3]
-            est_joint_origin = joint_pre_tf[:3, 3]
-            # get the joint axis in world coordinates
-            joint_axis = joint_dp_tf[:3, :3] @ joint_axis
-            joint_axis = joint_axis / torch.norm(joint_axis) # normalize
-            sapien_axis_direction = torch.from_numpy(sapien_axis_direction).to(joint_axis)
-            sapien_axis_origin = torch.from_numpy(sapien_axis_origin).to(est_joint_origin)
-            origin_delta = torch.norm(est_joint_origin - sapien_axis_origin)
-            axis_angle = torch.dot(joint_axis, sapien_axis_direction)/(torch.norm(joint_axis) * torch.norm(sapien_axis_direction))
-            axis_angle = torch.acos(axis_angle) * 180.0 / torch.pi
+        if(type(predicted_joint) == RevoluteJoint):
+            # turn the joint params into degrees
+            joint_params = joint_params * 180.0 / np.pi
+            gt_part_motion = np.abs(gt_part_motion * 180.0 / np.pi)
+
+        pred_part_motion = np.abs(joint_params[0] - joint_params[1])
+
+        print(f"gt part motion: {gt_part_motion}")
+        print(f"predicted part motion: {pred_part_motion}")
+        print(f"param delta for idx {articulation_idx}: {np.abs(pred_part_motion - gt_part_motion)}")
+
     
-    print(f"sapien axis origin: {sapien_axis_origin}")
-    print(f"joint axis origin: {est_joint_origin}")
-    print(f"sapien joint axis dir:{sapien_axis_direction}")
-    print(f"joint axis dir: {joint_axis}")
-    print(f"sapien part motion: {gt_part_motion}")
-    print(f"predicted part motion: {pred_part_motion}")
-    print(f"origin delta: {origin_delta}")
-    print(f"axis angle: {axis_angle}")
-    print(f"part motion error: {(pred_part_motion - gt_part_motion)}")
 
 
 if __name__=="__main__":
@@ -308,6 +194,11 @@ if __name__=="__main__":
     parser.add_argument('--manager_paths', 
                         type=str,
                         help='pths of the original scenes',
+                        default="")
+    
+    parser.add_argument('--transforms_jsons', 
+                        type=str,
+                        help='transforms.jsons of the original scenes with gt poses and configurations',
                         default="")
 
     parser.add_argument('--part_splats', 
@@ -330,15 +221,10 @@ if __name__=="__main__":
                         help="pickle of the learned articulations",
                         default="")
     
-    parser.add_argument('--static_part_id',
+    parser.add_argument('--root_part_id',
                         type=int,
                         help="id of the static part",
-                        default=2)
-    
-    parser.add_argument('--dyn_part_id',
-                        type=int,
-                        help="id of the dynamic part",
-                        default=3)
+                        default=1)
     
     parser.add_argument('--output_dir',
                         type=str,
@@ -347,4 +233,5 @@ if __name__=="__main__":
     
     args = parser.parse_args()
     manager_paths = args.manager_paths.split(",")
-    compute_metrics(args.object_name, manager_paths, args.part_splats, args.part_splats_normalized, args.pose_estimates, args.articulation_estimates, args.output_dir, static_recon_part_id=args.static_part_id, dynamic_recon_part_id=args.dyn_part_id)
+    transforms_jsons = args.transforms_jsons.split(",")
+    compute_metrics(args.object_name, manager_paths, transforms_jsons, args.part_splats, args.part_splats_normalized, args.pose_estimates, args.articulation_estimates, args.output_dir, root_part_id=args.root_part_id)

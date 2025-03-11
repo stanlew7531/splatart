@@ -1,13 +1,6 @@
 declare -a objects=("blade" "foldchair" "fridge" "laptop" "oven" "scissor" "stapler" "storage" "USB" "washer")
 declare -a num_classes=(3 3 3 3 10 3 4 5 3 6)
 
-
-declare -a objects=("laptop" "stapler")
-declare -a num_classes=(3 3)
-
-declare -a objects=("washer")
-declare -a num_classes=(3)
-
 declare -a times=(0 1)
 current_dir="$(pwd)"
 
@@ -28,6 +21,7 @@ for i in "${!objects[@]}"
                  --pipeline.model.cull_screen_size 0.5 --pipeline.model.cull_scale_thresh 1.3\
                  --pipeline.model.random_scale 0.5 --pipeline.model.camera_optimizer.mode off \
                  --pipeline.model.continue_cull_post_densification False --pipeline.model.use_scale_regularization True\
+                 &
 
                 #  --pipeline.model.random_scale 0.5 --pipeline.model.camera_optimizer.mode off\
                 #  --pipeline.model.cull_screen_size 0.5 --pipeline.model.cull_scale_thresh 1.3\
