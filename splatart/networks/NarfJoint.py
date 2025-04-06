@@ -5,7 +5,6 @@ import yaml
 from typing import Optional
 import warnings
 import pytorch3d.transforms as p3dt
-# from splatart.utils.lie_utils import SE3, SE3Exp, SO3Exp
 
 def tree_create_tfs_from_config(configuration_vector, root_part_idx, configuration_values, num_parts = None, part_poses = None):
     assert len(configuration_vector) == len(configuration_values), f"configuration vector and values must be the same length, got {len(configuration_vector)} and {len(configuration_values)}"

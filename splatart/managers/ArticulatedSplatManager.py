@@ -9,9 +9,6 @@ import pickle
 import pytorch3d.transforms as p3dt
 import torch
 
-from splatart.gui.CloudVis import CloudVisApp
-
-from splatart.utils.lie_utils import SE3, SE3Exp, SO3Exp
 from splatart.managers.JointManager import JointManager
 from splatart.networks.NarfJoint import RevoluteJoint, PrismaticJoint, SingleAxisJoint
 from splatart.managers.SplatManager import SplatManager, load_managers_nerfstudio, load_managers, load_model

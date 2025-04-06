@@ -11,9 +11,6 @@ from tqdm import tqdm
 
 import torch
 
-from splatart.gui.CloudVis import CloudVisApp
-
-from splatart.utils.lie_utils import SE3, SE3Exp, SO3Exp
 from splatart.managers.JointManager import JointManager
 from splatart.networks.NarfJoint import RevoluteJoint, PrismaticJoint, SingleAxisJoint
 from splatart.managers.SplatManager import SplatManagerSingle, mat_to_means_eulers, means_eulers_to_mat, means_quats_to_mat, mat_to_means_quats, apply_mat_tf_to_gauss_params

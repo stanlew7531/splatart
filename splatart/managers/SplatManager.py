@@ -9,7 +9,6 @@ from typing import Optional
 
 import pytorch3d.transforms as p3dt
 
-from splatart.utils.lie_utils import SE3, SE3Exp
 from splatart.networks.NarfJoint import RevoluteJoint, PrismaticJoint, SingleAxisJoint
 
 import gsplat

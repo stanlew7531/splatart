@@ -3,9 +3,6 @@ import numpy as np
 import yaml
 from typing import Optional
 
-from narf.utils.lie_utils import SE3, SE3Exp
-
-
 class NarfNetwork(torch.nn.Module):
     def __init__(self, config_file: Optional[str]=None, config_str:Optional[str]=None):
         super().__init__()
