@@ -24,10 +24,11 @@ def setup_sapien():
     scene = engine.create_scene()
     scene.set_timestep(1 / 100.)
 
-    # scene.set_ambient_light([0.2, 0.2, 0.2])
+    scene.set_ambient_light([0.2, 0.2, 0.2])
     scene.add_directional_light([0, 1, -1], [0.5, 0.5, 0.5])
 
     scene.add_directional_light([1, 1, 0.5], [0.5, 0.5, 0.5])
+    scene.add_directional_light([-1, 1, 0.5], [0.5, 0.5, 0.5])
 
     scene.add_point_light([4.0762, 1.0055, 5.9039], [1, 1, 1])
     scene.add_point_light([3.4154, 4.6753, 6.5981], [1, 1, 1])
@@ -122,8 +123,10 @@ def save_images(rgba, actor_labels, scene_idx, sample_idx, output_dir):
 
     return rgba_fname, segmentation_fname, labels_fname, train_mask_output_fname
 
-def get_spherical_pose(radius, theta, phi):
+def get_spherical_pose(radius, theta, phi, z_height = 0.0):
     initial_pose = np.eye(4)
+    initial_pose[3,3] = z_height # slightly above the object
+
     # radius transform - move along the +x axis
     tf_radius = np.eye(4)
     tf_radius[0, 3] = radius
@@ -138,6 +141,27 @@ def get_spherical_pose(radius, theta, phi):
     # compose the matrices
     final_pose = tf_radius @ tf_theta @ tf_phi @ initial_pose
     return final_pose
+
+def get_pose_center_loot_at(position:np.array, look_at:np.array):
+    # get the camera pose
+    camera_pose = np.eye(4)
+    camera_pose[:3, 3] = position
+    
+    forward = look_at - position
+    forward /= np.linalg.norm(forward)
+    right = np.cross(np.array([0, 0, 1]), forward)
+    right /= np.linalg.norm(right)
+    up = np.cross(forward, right)
+    up /= np.linalg.norm(up)
+    camera_pose[:3, :3] = np.column_stack((forward, right, up))
+
+    return camera_pose
+
+def polar_to_cartesian(radius, theta, phi):
+    x = radius * np.sin(np.radians(phi)) * np.cos(np.radians(theta))
+    y = radius * np.sin(np.radians(phi)) * np.sin(np.radians(theta))
+    z = radius * np.cos(np.radians(phi))
+    return np.array([x, y, z])
 
 def set_object_configuration(obj, qpos):
     obj.set_qpos(qpos)
@@ -206,12 +230,11 @@ def generate_dataset(input_sapien:str,\
                     "gt_part_world_poses": {}}
         
         scene_configuration = np.random.uniform(config_mins[0], config_maxs[0])
-        # only set the first joint for now
-        if(configurations_in is None):
-            cur_scene_configuration = obj.get_qpos()
-            cur_scene_configuration[0] = scene_configuration # leave the default config and set the first joint to a random spot
-            scene_configuration = cur_scene_configuration
-        else:
+        # this is needed for 1 DoF objects - need to turn from a single float to an array of shape [1,1]
+        if(np.isscalar(scene_configuration)):
+            scene_configuration = np.expand_dims(np.array(scene_configuration),  0)
+        print(f"scene configuration: {scene_configuration}")
+        if(configurations_in is not None):
             scene_configuration = obj.get_qpos()
             for idx in range(len(configurations_in[i])):
                 scene_configuration[idx] = configurations_in[i][idx]
@@ -229,11 +252,12 @@ def generate_dataset(input_sapien:str,\
             set_object_configuration(obj, scene_configuration)
             tf_json_to_add = {}
             # theta_phi_sample = np.random.uniform(-180, 180, 2) # sample theta and phi
-            theta = np.random.uniform(45, -45)
-            phi = np.random.uniform(-180, 180)
+            theta = np.random.uniform(-180, 180)
+            phi = np.random.uniform(-80, 80)
             # theta, phi = theta_phi_sample
             # tqdm.write(f"sample:{j}, theta:{theta}, phi:{phi}", end="\r")
-            camera_position = np.linalg.inv(get_spherical_pose(sample_radius, theta, phi))
+            # camera_position = np.linalg.inv(get_spherical_pose(sample_radius, theta, phi, z_height=10.0))
+            camera_position = get_pose_center_loot_at(polar_to_cartesian(sample_radius, theta, phi), np.array([0.,0.,0.]))
             camera_trans = camera_position[:3, 3]
             camera_rot = camera_position[:3, :3]
             # turn camera_rot to quaternion
@@ -272,10 +296,10 @@ if __name__=="__main__":
     parser.add_argument('--input_sapien', 
                         type=str,
                         help='location of the sapien/partnet-mobility dataset',
-                        default="/media/stanlew/Data/partnet-mobility-v0/dataset")
+                        default="/home/stanlew/Data/partnet-mobility-v0/dataset")
     parser.add_argument('--obj_id',
                         type=str,
-                        help='sapied id to generate the dataset for',
+                        help='sapien id to generate the dataset for',
                         default="103706")
     parser.add_argument('--obj_name',
                         type=str,
@@ -284,7 +308,7 @@ if __name__=="__main__":
     parser.add_argument('--num_scenes',
                         type=int,
                         help='number of scenes to sample from the configuration space',
-                        default=3)
+                        default=5)
     parser.add_argument('--scene_samples',
                         type=int,
                         help='number of samples to take in each scene',
@@ -301,7 +325,7 @@ if __name__=="__main__":
     parser.add_argument('--output_dir',
                         type=str,
                         help='output directory to save the datasets',
-                        default="/media/stanlew/Data/narf_sapien_data/v3/")
+                        default="/home/stanlew/Data/icra_sapien_data/v0/")
     
     args = parser.parse_args()
 
