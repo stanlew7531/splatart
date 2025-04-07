@@ -229,7 +229,9 @@ def generate_dataset(input_sapien:str,\
                     "configurations": {},
                     "gt_part_world_poses": {}}
         
-        scene_configuration = np.random.uniform(config_mins[0], config_maxs[0])
+        # scene_configuration = np.random.uniform(config_mins[0], config_maxs[0])
+        config_mids = (config_mins + config_maxs) / 2
+        scene_configuration = np.random.normal(config_mids, 0.25 * (config_maxs - config_mins))
         # this is needed for 1 DoF objects - need to turn from a single float to an array of shape [1,1]
         if(np.isscalar(scene_configuration)):
             scene_configuration = np.expand_dims(np.array(scene_configuration),  0)

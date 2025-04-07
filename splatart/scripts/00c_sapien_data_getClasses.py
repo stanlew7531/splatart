@@ -25,8 +25,6 @@ def get_num_parts(transforms_json):
     return max_idx
 
 if __name__=="__main__":
-    print("Generating data for sapien dataset...")
-
     parser = argparse.ArgumentParser(description="Given an entry in the Sapien object set, generate a NARF dataset (images, masks, etc.)")
 
     parser.add_argument('--transforms_json', 
@@ -37,4 +35,4 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     max_part = get_num_parts(args.transforms_json)
-    print("Number of parts: ", max_part)
+    print(max_part + 1)
