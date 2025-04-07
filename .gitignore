@@ -1,5 +1,6 @@
 /results
 /outputs
+/tmp
 *.egg-info
 *.pyc
 __pycache__/
