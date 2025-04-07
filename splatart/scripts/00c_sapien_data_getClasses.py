@@ -32,7 +32,7 @@ if __name__=="__main__":
     parser.add_argument('--transforms_json', 
                         type=str,
                         help="location of the generated sapien dataset's transforms.json file",
-                        default="/media/stanlew/Data/narf_sapien_data/v2/storage/0/transforms.json")
+                        default="/home/stanlew/Data/icra_sapien_data/v0/sapien_35059/0/transforms.json")
 
     args = parser.parse_args()
 

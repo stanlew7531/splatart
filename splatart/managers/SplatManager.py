@@ -77,7 +77,7 @@ def load_managers_nerfstudio_single(input_model_dirs:list[str],\
                 num_classes:int,\
                 config_yml:str = "config.yml",\
                 dataparser_tf:str = "dataparser_transforms.json",\
-                ns_base_path:str = "/home/stanlew/src/nerfstudio_splatart/"):
+                ns_base_path:str = "/home/stanlew/Repos/splatart"):
     
     splat_managers = []
     i = 0
