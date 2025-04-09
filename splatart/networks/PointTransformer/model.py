@@ -17,12 +17,10 @@ import torch_scatter
 from timm.models.layers import DropPath
 from collections import OrderedDict
 
-# try:
-#     import flash_attn
-# except ImportError:
-#     flash_attn = None
-
-flash_attn = None
+try:
+    import flash_attn
+except ImportError:
+    flash_attn = None
 
 from .serialization import encode
 
@@ -174,6 +172,12 @@ class Point(Dict):
         )
         self["sparse_shape"] = sparse_shape
         self["sparse_conv_feat"] = sparse_conv_feat
+
+    def detach(self):
+        for key in self.keys():
+            # if is a tensor, detach
+            if(isinstance(self[key], torch.Tensor)):
+                self[key] = self[key].detach()
 
 
 class PointModule(nn.Module):
